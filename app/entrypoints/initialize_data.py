@@ -58,10 +58,7 @@ def verify_data_integrity(download=False):
     s3_init = None
     if download:
         if not DATA_INIT_S3_CONF['aws_access_key_id'] or not DATA_INIT_S3_CONF['aws_secret_access_key']:
-            logger.warning('S3 credentials not configured. Set ASTRODASH_S3_ACCESS_KEY_ID and '
-                           'ASTRODASH_S3_SECRET_ACCESS_KEY to enable data downloads.')
-            logger.warning('Skipping data download.')
-            return
+            logger.info('S3 credentials not configured. Using anonymous access for read operations.')
         s3_init = ObjectStore(conf=DATA_INIT_S3_CONF)
         if not s3_init.client:
             logger.error('Failed to initialize S3 client. Check ASTRODASH_S3_* environment variables.')
