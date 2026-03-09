@@ -38,6 +38,10 @@ class ClassificationService:
         Raises:
             ClassificationException: If classification fails or returns no results
         """
+        # Normalize: treat empty string as None so we don't fall back to built-in model
+        if user_model_id is not None and (isinstance(user_model_id, str) and not user_model_id.strip()):
+            user_model_id = None
+
         # Determine the actual model type for user-uploaded models
         if user_model_id:
             model_type = "user_uploaded"

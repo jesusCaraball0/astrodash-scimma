@@ -1,0 +1,357 @@
+{% extends "astrodash/base.html" %}
+{% load static %}
+{% load crispy_forms_tags %}
+
+{% block content %}
+<div class="container mt-5 mb-5" style="position: relative;">
+    <a href="{% url 'astrodash:landing_page' %}"
+       aria-label="Back to main menu"
+       style="
+            position: absolute;
+            top: 8px;
+            right: 24px;
+            z-index: 10;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: #e0e0e0;
+            color: #333333;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+        ">
+        &larr;
+    </a>
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <!-- Header -->
+            <div class="text-center mb-5">
+                <h1 class="display-4 mb-3 text-muted" style="font-weight: 800;">
+                    Choose Your Model
+                </h1>
+                <p class="lead text-muted">Select the machine learning model for classification</p>
+            </div>
+
+            <!-- Messages -->
+            {% if messages %}
+            <div class="mb-4">
+                {% for message in messages %}
+                <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <form method="post" enctype="multipart/form-data" id="modelSelectionForm">
+                {% csrf_token %}
+                {{ form.action_type }}
+                {{ form.model_type }}
+
+                <!-- Model Selection Cards -->
+                <div class="row mb-4">
+                    <!-- Transformer Model Card -->
+                    <div class="col-lg-3 col-md-6 mb-4">
+                        <div class="card shadow-sm h-100 model-card" 
+                             data-model-type="transformer"
+                             style="cursor: pointer; border: 2px solid transparent; transition: all 0.3s ease;"
+                             onmouseover="this.style.borderColor='#ff8c00'; this.style.boxShadow='0 4px 8px rgba(255,140,0,0.3)'"
+                             onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='transparent'; this.style.boxShadow=''"
+                             onclick="selectModel('transformer')">
+                            <div class="card-body">
+                                <h4 class="card-title text-center mb-3">Transformer Model</h4>
+                                <p class="card-text text-center text-muted mb-4">
+                                    Advanced transformer-based model with 5-class classification
+                                </p>
+                                
+                                <!-- Feature Tags -->
+                                <div class="d-flex justify-content-center flex-wrap gap-2">
+                                    <span class="badge" style="background-color: #ff8c00; color: white; padding: 0.5em 1em;">Transformer</span>
+                                    <span class="badge" style="background-color: #ff8c00; color: white; padding: 0.5em 1em;">5 Classes</span>
+                                    <span class="badge" style="background-color: #ff8c00; color: white; padding: 0.5em 1em;">Fast Inference</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Dash Model Card -->
+                    <div class="col-lg-3 col-md-6 mb-4">
+                        <div class="card shadow-sm h-100 model-card" 
+                             data-model-type="dash"
+                             style="cursor: pointer; border: 2px solid transparent; transition: all 0.3s ease;"
+                             onmouseover="this.style.borderColor='#28a745'; this.style.boxShadow='0 4px 8px rgba(40,167,69,0.3)'"
+                             onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='transparent'; this.style.boxShadow=''"
+                             onclick="selectModel('dash')">
+                            <div class="card-body position-relative">
+                                <!-- Recommended Badge -->
+                                <span class="badge badge-success position-absolute" style="top: 10px; right: 10px; background-color: #28a745; color: white; border: 1px solid white;">
+                                    RECOMMENDED
+                                </span>
+                                
+                                <!-- Flask Icon -->
+                                <div class="text-center mb-3" style="color: #28a745;">
+                                    <i class="bi bi-flask" style="font-size: 2rem;"></i>
+                                </div>
+                                
+                                <h4 class="card-title text-center mb-3">Dash Model</h4>
+                                <p class="card-text text-center text-muted mb-4">
+                                    CNN-based model from the original DASH paper
+                                </p>
+                                
+                                <!-- Feature Tags -->
+                                <div class="d-flex justify-content-center flex-wrap gap-2">
+                                    <span class="badge badge-success" style="padding: 0.5em 1em;">CNN</span>
+                                    <span class="badge badge-success" style="padding: 0.5em 1em;">Template Matching</span>
+                                    <span class="badge badge-success" style="padding: 0.5em 1em;">RLap Scores</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Existing Uploaded Models Card -->
+                    <div class="col-lg-3 col-md-6 mb-4">
+                        <div class="card shadow-sm h-100 model-card"
+                             data-model-type="user_model"
+                             style="cursor: pointer; border: 2px solid transparent; transition: all 0.3s ease;"
+                             onmouseover="this.style.borderColor='#6f42c1'; this.style.boxShadow='0 4px 8px rgba(111,66,193,0.3)'"
+                             onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='transparent'; this.style.boxShadow=''"
+                             onclick="selectModel('user_model')">
+                            <div class="card-body">
+                                <div class="text-center mb-3" style="color: #6f42c1;">
+                                    <i class="bi bi-collection" style="font-size: 2rem;"></i>
+                                </div>
+                                <h4 class="card-title text-center mb-3">User Uploaded Models</h4>
+                                <p class="card-text text-center text-muted mb-2">
+                                    Pick from existing user-uploaded models
+                                </p>
+                                <p class="card-text text-center text-muted small mb-0">
+                                    Available: {{ existing_models_count|default:"0" }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upload Model Card -->
+                    <div class="col-lg-3 col-md-6 mb-4">
+                        <div class="card shadow-sm h-100 model-card" 
+                             data-model-type="upload"
+                             style="cursor: pointer; border: 2px solid transparent; transition: all 0.3s ease;"
+                             onmouseover="this.style.borderColor='#007bff'; this.style.boxShadow='0 4px 8px rgba(0,123,255,0.3)'"
+                             onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='transparent'; this.style.boxShadow=''"
+                             onclick="selectModel('upload')">
+                            <div class="card-body">
+                                <div class="text-center mb-3">
+                                    <i class="bi bi-cloud-upload" style="font-size: 2rem; color: #007bff;"></i>
+                                </div>
+                                <h4 class="card-title text-center mb-3">Upload Your Model</h4>
+                                <p class="card-text text-center text-muted">
+                                    Upload a PyTorch .pth/.pt file, class mapping, and input shape
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Existing Models Section -->
+                <div class="card shadow-sm mb-4" id="existingModelsSection" style="display: none;">
+                    <div class="card-body">
+                        <div class="form-group">
+                            {{ form.existing_model_id|as_crispy_field }}
+                        </div>
+
+                        <div class="d-flex justify-content-between align-items-center mt-4">
+                            <a href="{% url 'astrodash:landing_page' %}" class="btn btn-outline-secondary">
+                                CANCEL
+                            </a>
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                Use selected model
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Upload Model Section (Form Fields). Shown when show_upload_section is set (e.g. validation errors or after error). -->
+                <div class="card shadow-sm mb-4" id="uploadSection" style="display: {% if show_upload_section|default:False %}block{% else %}none{% endif %};">
+                    <div class="card-body">
+
+                        <div class="form-group">
+                            <label for="{{ form.model_file.id_for_label }}">{{ form.model_file.label }}</label>
+                            <div class="custom-file">
+                                <input type="file" class="custom-file-input" id="{{ form.model_file.id_for_label }}" 
+                                       name="{{ form.model_file.name }}" 
+                                       accept=".pth,.pt"
+                                       onchange="updateFileName(this)">
+                                <label class="custom-file-label" for="{{ form.model_file.id_for_label }}">
+                                    <i class="bi bi-cloud-upload"></i> CHOOSE MODEL FILE
+                                </label>
+                            </div>
+                            {% if form.model_file.errors %}
+                            <div class="text-danger small mt-1">{{ form.model_file.errors }}</div>
+                            {% endif %}
+                            {% if form.model_file.help_text %}
+                            <small class="form-text text-muted">{{ form.model_file.help_text }}</small>
+                            {% endif %}
+                        </div>
+
+                        <div class="form-group">
+                            {{ form.model_name|as_crispy_field }}
+                        </div>
+
+                        <div class="form-group">
+                            {{ form.model_description|as_crispy_field }}
+                        </div>
+
+                        <div class="form-group">
+                            {{ form.class_mapping|as_crispy_field }}
+                        </div>
+
+                        <div class="form-group">
+                            {{ form.input_shape|as_crispy_field }}
+                        </div>
+
+                        <div class="d-flex justify-content-between align-items-center mt-4">
+                            <a href="{% url 'astrodash:landing_page' %}" class="btn btn-outline-secondary">
+                                CANCEL
+                            </a>
+                            <button type="submit" class="btn btn-primary btn-lg">
+                                Upload model
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<style>
+    .model-card.selected {
+        border-color: #007bff !important;
+        box-shadow: 0 4px 12px rgba(0,123,255,0.4) !important;
+    }
+    .model-card.selected[data-model-type="transformer"] {
+        border-color: #ff8c00 !important;
+        box-shadow: 0 4px 12px rgba(255,140,0,0.4) !important;
+    }
+    .model-card.selected[data-model-type="dash"] {
+        border-color: #28a745 !important;
+        box-shadow: 0 4px 12px rgba(40,167,69,0.4) !important;
+    }
+    .model-card.selected[data-model-type="upload"] {
+        border-color: #007bff !important;
+        box-shadow: 0 4px 12px rgba(0,123,255,0.4) !important;
+    }
+    .model-card.selected[data-model-type="user_model"] {
+        border-color: #6f42c1 !important;
+        box-shadow: 0 4px 12px rgba(111,66,193,0.35) !important;
+    }
+    .gap-2 > * {
+        margin: 0.25rem;
+    }
+</style>
+
+<script>
+    let selectedModel = null;
+
+    function selectModel(modelType) {
+        // Remove selected class from all cards
+        document.querySelectorAll('.model-card').forEach(card => {
+            card.classList.remove('selected');
+            const borderColor = card.dataset.modelType === 'transformer' ? 'transparent' : 'transparent';
+            card.style.borderColor = borderColor;
+        });
+
+        // Add selected class to clicked card
+        const clickedCard = document.querySelector(`[data-model-type="${modelType}"]`);
+        clickedCard.classList.add('selected');
+        
+        if (modelType === 'transformer') {
+            clickedCard.style.borderColor = '#ff8c00';
+        } else if (modelType === 'dash') {
+            clickedCard.style.borderColor = '#28a745';
+        }
+
+        // Update hidden field
+        const modelTypeField = document.querySelector('input[name="{{ form.model_type.name }}"]');
+        if (modelTypeField) {
+            modelTypeField.value = modelType;
+        }
+        selectedModel = modelType;
+
+        // Show/hide upload section
+        const uploadSection = document.getElementById('uploadSection');
+        const existingModelsSection = document.getElementById('existingModelsSection');
+        
+        if (modelType === 'upload') {
+            uploadSection.style.display = 'block';
+            if (existingModelsSection) existingModelsSection.style.display = 'none';
+            // Make upload fields required
+            const modelFileInput = document.querySelector('input[name="{{ form.model_file.name }}"]');
+            const modelNameInput = document.querySelector('input[name="{{ form.model_name.name }}"]');
+            const classMappingInput = document.querySelector('textarea[name="{{ form.class_mapping.name }}"]');
+            const inputShapeInput = document.querySelector('input[name="{{ form.input_shape.name }}"]');
+            const existingModelSelect = document.querySelector('select[name="{{ form.existing_model_id.name }}"]');
+            
+            if (modelFileInput) modelFileInput.required = true;
+            if (modelNameInput) modelNameInput.required = true;
+            if (classMappingInput) classMappingInput.required = true;
+            if (inputShapeInput) inputShapeInput.required = true;
+            if (existingModelSelect) existingModelSelect.required = false;
+        } else if (modelType === 'user_model') {
+            uploadSection.style.display = 'none';
+            if (existingModelsSection) existingModelsSection.style.display = 'block';
+
+            // Only require the dropdown selection, not upload fields
+            const modelFileInput = document.querySelector('input[name="{{ form.model_file.name }}"]');
+            const modelNameInput = document.querySelector('input[name="{{ form.model_name.name }}"]');
+            const classMappingInput = document.querySelector('textarea[name="{{ form.class_mapping.name }}"]');
+            const inputShapeInput = document.querySelector('input[name="{{ form.input_shape.name }}"]');
+            const existingModelSelect = document.querySelector('select[name="{{ form.existing_model_id.name }}"]');
+
+            if (modelFileInput) modelFileInput.required = false;
+            if (modelNameInput) modelNameInput.required = false;
+            if (classMappingInput) classMappingInput.required = false;
+            if (inputShapeInput) inputShapeInput.required = false;
+            if (existingModelSelect) existingModelSelect.required = true;
+        } else {
+            uploadSection.style.display = 'none';
+            if (existingModelsSection) existingModelsSection.style.display = 'none';
+            // Remove required from upload fields
+            const modelFileInput = document.querySelector('input[name="{{ form.model_file.name }}"]');
+            const modelNameInput = document.querySelector('input[name="{{ form.model_name.name }}"]');
+            const classMappingInput = document.querySelector('textarea[name="{{ form.class_mapping.name }}"]');
+            const inputShapeInput = document.querySelector('input[name="{{ form.input_shape.name }}"]');
+            const existingModelSelect = document.querySelector('select[name="{{ form.existing_model_id.name }}"]');
+            
+            if (modelFileInput) modelFileInput.required = false;
+            if (modelNameInput) modelNameInput.required = false;
+            if (classMappingInput) classMappingInput.required = false;
+            if (inputShapeInput) inputShapeInput.required = false;
+            if (existingModelSelect) existingModelSelect.required = false;
+            
+            // Automatically submit form for transformer or dash
+            document.getElementById('modelSelectionForm').submit();
+        }
+    }
+
+    function updateFileName(input) {
+        const label = input.nextElementSibling;
+        if (input.files && input.files.length > 0) {
+            label.textContent = input.files[0].name;
+        } else {
+            label.innerHTML = '<i class="bi bi-cloud-upload"></i> CHOOSE MODEL FILE';
+        }
+    }
+
+    // On load: if server asked to show upload section (e.g. validation errors), select upload card so errors are visible
+    document.addEventListener('DOMContentLoaded', function() {
+        if ({{ show_upload_section|default:False|yesno:"true,false" }}) {
+            selectModel('upload');
+        }
+    });
+</script>
+{% endblock %}

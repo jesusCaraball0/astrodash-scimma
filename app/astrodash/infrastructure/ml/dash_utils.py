@@ -23,7 +23,14 @@ def get_training_parameters(models_dir: str = None) -> Dict[str, Any]:
     """
     if models_dir is None:
         settings = get_settings()
-        models_dir = os.path.dirname(settings.dash_training_params_path)
+        # Use the full path from settings directly (already points to zeroZ version)
+        params_path = settings.dash_training_params_path
+        logger = get_logger(__name__)
+        logger.info(f"Loading training parameters from: {params_path}")
+        with open(params_path, "rb") as f:
+            pars = pickle.load(f, encoding="latin1")
+        logger.info("Training parameters loaded.")
+        return pars
 
     return load_training_parameters(models_dir)
 
@@ -33,7 +40,11 @@ def load_training_parameters(models_dir: str) -> Dict[str, Any]:
     """
     # If models_dir is a directory, construct the path; otherwise use it as the full path
     if os.path.isdir(models_dir):
-        params_path = os.path.join(models_dir, "zeroZ/training_params.pickle")
+        # Check if the directory already ends with zeroZ to avoid double appending
+        if models_dir.endswith("zeroZ"):
+            params_path = os.path.join(models_dir, "training_params.pickle")
+        else:
+            params_path = os.path.join(models_dir, "zeroZ/training_params.pickle")
     else:
         params_path = models_dir
 

@@ -146,3 +146,7 @@ quiverMaps/
 .DS_Store
 
 .vscode/
+
+# Astrodash local
+app/astrodash/explorer/dash_twinsfromspace.html
+astrodash-logs/

@@ -5,15 +5,15 @@
 <div class="jumbotron text-center mt-4" style="background: transparent;">
     <!-- Cosmic Title Simulation -->
     <h1 class="display-4"
-        style="background: linear-gradient(90deg, #b3baff 0%, #fbc2eb 100%); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; text-shadow: 0 2px 16px #2a2a4a;">
+        style="color: #000000; font-weight: 800;">
         Astrodash
     </h1>
     <p class="lead text-muted">Deep learning for Supernova classification.</p>
     <hr class="my-4">
     <p>Upload your spectra and get instant classification results using our advanced models.</p>
     <div class="d-flex justify-content-center gap-3">
-        <a class="btn btn-primary btn-lg mr-2" href="{% url 'astrodash:classify' %}" role="button">Classify Spectrum</a>
-        <a class="btn btn-secondary btn-lg" href="{% url 'astrodash:batch_process_ui' %}" role="button">Batch
+        <a class="btn btn-primary btn-lg mr-2" href="{% url 'astrodash:model_selection' %}?action=classify" role="button">Classify Spectrum</a>
+        <a class="btn btn-secondary btn-lg" href="{% url 'astrodash:model_selection' %}?action=batch" role="button">Batch
             Processing</a>
     </div>
 </div>

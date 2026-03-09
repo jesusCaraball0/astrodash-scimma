@@ -2,12 +2,29 @@
 {% load crispy_forms_tags %}
 
 {% block content %}
-<div class="container mt-4">
+<div class="container mt-4" style="position: relative;">
+    <a href="{% url 'astrodash:landing_page' %}"
+       aria-label="Back to main menu"
+       style="
+            position: absolute;
+            top: 8px;
+            right: 24px;
+            z-index: 10;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: #e0e0e0;
+            color: #333333;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+        ">
+        &larr;
+    </a>
+
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2>Batch Processing</h2>
-        <a href="{% url 'astrodash:landing_page' %}" class="btn btn-outline-secondary">
-            <i class="bi bi-arrow-left"></i> Back to Home
-        </a>
     </div>
 
     <div class="row">

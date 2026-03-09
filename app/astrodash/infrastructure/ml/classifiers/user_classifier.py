@@ -87,9 +87,11 @@ class UserClassifier(BaseClassifier):
                     x_new = np.linspace(0, 1, int(target_length))
                     flux = np.interp(x_new, x_old, flux)
                     wavelength = np.interp(x_new, x_old, wavelength)
-                wavelength_tensor = torch.tensor(wavelength, dtype=torch.float32).unsqueeze(0)  # [1, target_length]
-                flux_tensor = torch.tensor(flux, dtype=torch.float32).unsqueeze(0)              # [1, target_length]
-                redshift_tensor = torch.tensor([redshift], dtype=torch.float32)               # [1]
+                # Architecture does redshift[:, None]; SinusoidalMLPPositionalEmbedding expects 2D [batch, seq].
+                # So redshift must be 1D [batch] so redshift[:, None] -> [batch, 1]; [1, 1] would -> [1,1,1] and embed to 4D, breaking cat with 3D flux_embd.
+                wavelength_tensor = torch.tensor(wavelength, dtype=torch.float32).unsqueeze(0)   # [1, target_length]
+                flux_tensor = torch.tensor(flux, dtype=torch.float32).unsqueeze(0)                # [1, target_length]
+                redshift_tensor = torch.tensor([redshift], dtype=torch.float32)                   # [1] 1D so embedder output is 3D
                 with torch.no_grad():
                     output = self.model(wavelength_tensor, flux_tensor, redshift_tensor)
                 probs = torch.softmax(output, dim=-1).cpu().numpy()[0]

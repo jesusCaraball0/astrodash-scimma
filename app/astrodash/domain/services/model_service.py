@@ -82,15 +82,31 @@ class ModelService:
                     metadata={"description": description, "owner": owner}
                 )
 
-                # Validate the saved model
-                model_info = self._validate_saved_model(
-                    model_id, input_shapes, class_mapping
-                )
+                # Validate the saved model (forward pass with dummy inputs). If validation
+                # fails (e.g. dimension mismatch with dummy shapes), we still accept the
+                # upload so the user can use the model; inference may work with real inputs.
+                try:
+                    model_info = self._validate_saved_model(
+                        model_id, input_shapes, class_mapping
+                    )
+                    model_info["validation_passed"] = True
+                except Exception as val_err:
+                    logger.warning(
+                        "Model forward-pass validation failed for %s (model still saved): %s",
+                        model_id,
+                        val_err,
+                    )
+                    model_info = {"validation_passed": False}
             else:
                 # Fallback: validate in memory
-                model_info = self._validate_model_in_memory(
-                    model_content, input_shapes, class_mapping
-                )
+                try:
+                    model_info = self._validate_model_in_memory(
+                        model_content, input_shapes, class_mapping
+                    )
+                    model_info["validation_passed"] = True
+                except Exception as val_err:
+                    logger.warning("In-memory model validation failed: %s", val_err)
+                    model_info = {"validation_passed": False}
                 file_paths = {
                     "model": f"temp_{model_id}.pth",
                     "class_mapping": f"temp_{model_id}.classes.json",

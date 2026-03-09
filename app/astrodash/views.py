@@ -15,6 +15,7 @@ from astrodash.core.exceptions import (
     TemplateNotFoundException,
     ElementNotFoundException,
     SpectrumProcessingException,
+    LineListNotFoundException,
 )
 from astrodash.services import (
     get_template_analysis_service,
@@ -81,8 +82,14 @@ def template_line_list(request):
 
 @require_GET
 def line_list_elements(request):
-    service = get_line_list_service()
-    return JsonResponse({"elements": service.get_available_elements()})
+    try:
+        service = get_line_list_service()
+        return JsonResponse({"elements": service.get_available_elements()})
+    except LineListNotFoundException as exc:
+        return _json_error(exc.message, status=exc.status_code)
+    except Exception as e:
+        logger.exception("line_list_elements failed")
+        return _json_error(str(e), status=500)
 
 
 @require_GET

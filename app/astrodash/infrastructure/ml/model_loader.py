@@ -93,6 +93,16 @@ class ModelLoader:
         """
         Validate model by running dummy inputs and checking output shape.
 
+        How the dummy pass works when your model takes 3 args (e.g. model(arg1, arg2, arg3)):
+        - You provide input_shapes = [arg1.shape, arg2.shape, arg3.shape], e.g. [[1, 1024], [1, 1024], [1, 1]].
+        - We build one dummy tensor per shape: dummy_i = torch.randn(*shape_i), so same shapes as your real inputs.
+        - We call model(dummy_1, dummy_2, dummy_3) and check that the output exists and its last dimension
+          matches len(class_mapping). No gradient, no real data.
+
+        If the model expects more inputs than you provided, we infer (e.g. for 3-arg transformer we build
+        wavelength, flux, redshift from the first shape). If validation fails (e.g. internal shape mismatch
+        with dummies), the upload still succeeds; you can use the model at inference where real shapes match.
+
         Args:
             model: Loaded PyTorch model
             input_shapes: List of input shapes for each model input
@@ -156,7 +166,7 @@ class ModelLoader:
                     for i in range(len(input_shapes), num_inputs):
                         dummy_inputs.append(torch.randn(*base_shape, device=self.device))
             else:
-                # Use provided input shapes
+                # Use provided input shapes: one randn tensor per shape, then model(d1, d2, ...)
                 dummy_inputs = [torch.randn(*shape, device=self.device) for shape in input_shapes]
 
             # Run inference with error handling

@@ -2,7 +2,38 @@
 {% load crispy_forms_tags %}
 
 {% block content %}
-<div class="container-fluid mt-4">
+<div class="container-fluid mt-4" style="position: relative;">
+    <a href="{% url 'astrodash:landing_page' %}"
+       aria-label="Back to main menu"
+       style="
+            position: absolute;
+            top: 8px;
+            right: 24px;
+            z-index: 10;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background-color: #e0e0e0;
+            color: #333333;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+        ">
+        &larr;
+    </a>
+    <!-- Tabs: Classification | DASH Twins -->
+    <ul class="nav nav-tabs mb-3" id="classifyTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+            <a class="nav-link active" id="classification-tab" data-toggle="tab" href="#classification-pane" role="tab" aria-controls="classification-pane" aria-selected="true">Classification</a>
+        </li>
+        <li class="nav-item" role="presentation">
+            <a class="nav-link" id="twins-tab" data-toggle="tab" href="#twins-pane" role="tab" aria-controls="twins-pane" aria-selected="false">DASH Twins</a>
+        </li>
+    </ul>
+
+    <div class="tab-content" id="classifyTabContent">
+        <div class="tab-pane fade show active" id="classification-pane" role="tabpanel" aria-labelledby="classification-tab">
     <div class="row">
         <!-- Sidebar: Input Form -->
         <div class="col-md-3">
@@ -13,6 +44,19 @@
                 <div class="card-body">
                     <form method="post" enctype="multipart/form-data">
                         {% csrf_token %}
+
+                        {% if selected_model_display %}
+                        <input type="hidden" name="model" value="user_uploaded">
+                        <div class="form-group">
+                            <label class="form-label">Model</label>
+                            <p class="form-control-plaintext font-weight-bold mb-2">{{ selected_model_display }}</p>
+                            <p class="small text-muted">Chosen on <a href="{% url 'astrodash:model_selection' %}?action=classify">Choose Your Model</a></p>
+                        </div>
+                        {% else %}
+                        <div class="form-group">
+                            {{ form.model|as_crispy_field }}
+                        </div>
+                        {% endif %}
 
                         <div class="form-group">
                             {{ form.supernova_name|as_crispy_field }}
@@ -25,10 +69,6 @@
                         </div>
 
                         <hr>
-
-                        <div class="form-group">
-                            {{ form.model|as_crispy_field }}
-                        </div>
                         <div class="form-group">
                             {{ form.smoothing|as_crispy_field }}
                         </div>
@@ -60,13 +100,90 @@
         <div class="col-md-9">
             {% if success %}
             <div class="card mb-4 shadow-sm">
-                <div class="card-header">
+                <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
                     <h4 class="mb-0">Spectrum Analysis</h4>
+                    <div class="mt-2 mt-md-0">
+                        <button type="button" class="btn btn-outline-primary btn-sm mr-2" id="customize-plot-btn" aria-label="Customize plot overlays">CUSTOMIZE PLOT</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="save-plot-btn" aria-label="Save plot">SAVE</button>
+                    </div>
                 </div>
                 <div class="card-body">
                     <!-- Bokeh Plot Container -->
                     <div id="plot-container">
                         {{ plot_div|safe }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Customize Plot Modal -->
+            <div class="modal fade" id="customize-plot-modal" tabindex="-1" role="dialog" aria-labelledby="customize-plot-modal-label" aria-hidden="true">
+                <div class="modal-dialog modal-lg" role="document">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="customize-plot-modal-label">Customize Plot</h5>
+                            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                        <div class="modal-body">
+                            {% if show_templates_section %}
+                            <section class="mb-4">
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <h6 class="mb-0 font-weight-bold">Template Overlays</h6>
+                                    <div class="custom-control custom-checkbox">
+                                        <input type="checkbox" class="custom-control-input" id="show-templates-checkbox" checked>
+                                        <label class="custom-control-label" for="show-templates-checkbox">Show Templates</label>
+                                    </div>
+                                </div>
+                                <p class="small text-muted">Overlay template spectra from best matches or add custom templates:</p>
+                                <div class="mb-3">
+                                    <strong>Best Match Templates</strong>
+                                    <div id="best-match-templates" class="d-flex flex-wrap mt-2">
+                                        {% for match in results.best_matches %}
+                                        <button type="button" class="btn btn-outline-secondary btn-sm template-btn" data-sn-type="{{ match.type }}" data-age="{{ match.age }}" title="{{ match.type }} {{ match.age }}">
+                                            {{ match.type }} {{ match.age }}
+                                        </button>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <strong>Add Custom Template</strong>
+                                    <div class="d-flex flex-wrap align-items-center mt-2">
+                                        <select id="custom-sn-type" class="form-control form-control-sm mr-2" style="width: auto; min-width: 120px;">
+                                            <option value="">— SN Type —</option>
+                                        </select>
+                                        <select id="custom-age" class="form-control form-control-sm mr-2" style="width: auto; min-width: 140px;">
+                                            <option value="">— Age —</option>
+                                        </select>
+                                        <button type="button" class="btn btn-primary btn-sm" id="add-custom-template">ADD</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <strong>Visible Templates</strong>
+                                    <ul id="visible-templates-list" class="list-group list-group-flush mt-2 small"></ul>
+                                </div>
+                            </section>
+                            {% endif %}
+                            <section>
+                                <div class="d-flex justify-content-between align-items-center mb-2">
+                                    <h6 class="mb-0 font-weight-bold">Element/Ion Lines</h6>
+                                    <div class="custom-control custom-checkbox">
+                                        <input type="checkbox" class="custom-control-input" id="show-elements-checkbox" checked>
+                                        <label class="custom-control-label" for="show-elements-checkbox">Show Element/Ion Lines</label>
+                                    </div>
+                                </div>
+                                <div id="element-buttons" class="d-flex flex-wrap">
+                                    <span class="text-muted small">Loading elements…</span>
+                                </div>
+                            </section>
+                        </div>
+                        <style>
+                            #element-buttons .btn, #best-match-templates .btn { margin-right: 0.25rem; margin-bottom: 0.25rem; }
+                        </style>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-dismiss="modal">CLOSE</button>
+                            <button type="button" class="btn btn-primary" id="apply-overlays-btn">APPLY</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -109,7 +226,7 @@
                 </div>
             </div>
             {% else %}
-            <div class="alert alert-info" role="alert">
+            <div class="alert alert-info" role="alert" style="width: calc(100% - 80px);">
                 <h4 class="alert-heading">Welcome!</h4>
                 <p>Use the form on the left to upload a spectrum file and start classification.</p>
                 <hr>
@@ -118,9 +235,208 @@
             {% endif %}
         </div>
     </div>
+        </div>
+        <!-- DASH Twins tab: embedded explorer -->
+        <div class="tab-pane fade" id="twins-pane" role="tabpanel" aria-labelledby="twins-tab">
+            <iframe src="{% url 'astrodash:dash_twins' %}" title="DASH Twins Explorer" style="width: 100%; height: calc(100vh - 180px); min-height: 600px; border: 1px solid #dee2e6; border-radius: 4px;"></iframe>
+        </div>
+    </div>
 </div>
 
 {{ plot_script|safe }}
+
+{% if success %}
+{{ overlay_elements|json_script:"initial-overlay-elements" }}
+{{ overlay_templates|json_script:"initial-overlay-templates" }}
+{{ available_elements|json_script:"available-elements" }}
+<script>
+(function() {
+    var plotConfig = {
+        apiBase: "{{ plot_api_base|escapejs }}",
+        classifyUrl: "{{ request.path|escapejs }}"
+    };
+    var initialElements = [];
+    var initialTemplates = [];
+    var elEl = document.getElementById("initial-overlay-elements");
+    var elT = document.getElementById("initial-overlay-templates");
+    if (elEl) try { initialElements = JSON.parse(elEl.textContent); } catch (e) {}
+    if (elT) try { initialTemplates = JSON.parse(elT.textContent); } catch (e) {}
+
+    var selectedElements = new Set(initialElements);
+    var selectedTemplates = new Set(initialTemplates);
+
+    function templateKey(snType, age) { return snType + "|" + age; }
+    function templateKeyDisplay(snType, age) { return snType + " " + age; }
+
+    function applyOverlays() {
+        var params = [];
+        selectedElements.forEach(function(el) {
+            params.push("overlay_elements=" + encodeURIComponent(el));
+        });
+        selectedTemplates.forEach(function(k) {
+            params.push("overlay_templates=" + encodeURIComponent(k));
+        });
+        var qs = params.length ? "?" + params.join("&") : "";
+        window.location.href = plotConfig.classifyUrl + qs;
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        var apiBase = plotConfig.apiBase || "";
+        if (apiBase.indexOf("/") !== 0) apiBase = "/" + apiBase;
+
+        var customizeBtn = document.getElementById("customize-plot-btn");
+        var modalEl = document.getElementById("customize-plot-modal");
+        if (customizeBtn && modalEl) {
+            customizeBtn.addEventListener("click", function() {
+                $("#customize-plot-modal").modal("show");
+            });
+        }
+
+        var container = document.getElementById("element-buttons");
+        var elementsList = [];
+        var elScript = document.getElementById("available-elements");
+        if (elScript) try { elementsList = JSON.parse(elScript.textContent); } catch (e) {}
+        if (!Array.isArray(elementsList)) elementsList = [];
+        if (container) {
+            container.innerHTML = "";
+            elementsList.forEach(function(el) {
+                var btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "btn btn-sm element-btn " + (selectedElements.has(el) ? "btn-primary" : "btn-outline-secondary");
+                btn.setAttribute("data-element", el);
+                btn.textContent = el;
+                btn.onclick = function() {
+                    if (selectedElements.has(el)) {
+                        selectedElements.delete(el);
+                        btn.classList.remove("btn-primary");
+                        btn.classList.add("btn-outline-secondary");
+                    } else {
+                        selectedElements.add(el);
+                        btn.classList.remove("btn-outline-secondary");
+                        btn.classList.add("btn-primary");
+                    }
+                };
+                container.appendChild(btn);
+            });
+        }
+        if (container && elementsList.length === 0) {
+            container.innerHTML = "<span class=\"text-muted small\">No element list available. Check line list file path.</span>";
+        }
+
+        if (document.querySelectorAll(".template-btn").length) {
+            document.querySelectorAll(".template-btn").forEach(function(btn) {
+                var snType = btn.getAttribute("data-sn-type");
+                var age = btn.getAttribute("data-age");
+                var key = templateKey(snType, age);
+                var isSelected = selectedTemplates.has(key);
+                if (isSelected) {
+                    btn.classList.remove("btn-outline-secondary");
+                    btn.classList.add("btn-danger");
+                }
+                btn.onclick = function() {
+                    if (selectedTemplates.has(key)) {
+                        selectedTemplates.delete(key);
+                        btn.classList.remove("btn-danger");
+                        btn.classList.add("btn-outline-secondary");
+                    } else {
+                        selectedTemplates.add(key);
+                        btn.classList.remove("btn-outline-secondary");
+                        btn.classList.add("btn-danger");
+                    }
+                    updateVisibleTemplatesList();
+                };
+            });
+        }
+
+        function updateVisibleTemplatesList() {
+            var ul = document.getElementById("visible-templates-list");
+            if (!ul) return;
+            ul.innerHTML = "";
+            selectedTemplates.forEach(function(k) {
+                var parts = k.split("|", 2);
+                var label = parts[0] + " " + (parts[1] || "");
+                var li = document.createElement("li");
+                li.className = "list-group-item d-flex justify-content-between align-items-center";
+                li.textContent = label;
+                var rm = document.createElement("button");
+                rm.type = "button";
+                rm.className = "btn btn-sm btn-outline-danger";
+                rm.textContent = "Remove";
+                rm.onclick = function() {
+                    selectedTemplates.delete(k);
+                    var btn = document.querySelector(".template-btn[data-sn-type='" + parts[0] + "'][data-age='" + (parts[1] || "") + "']");
+                    if (btn) {
+                        btn.classList.remove("btn-danger");
+                        btn.classList.add("btn-outline-secondary");
+                    }
+                    updateVisibleTemplatesList();
+                };
+                li.appendChild(rm);
+                ul.appendChild(li);
+            });
+        }
+        updateVisibleTemplatesList();
+
+        var snSelect = document.getElementById("custom-sn-type");
+        var ageSelect = document.getElementById("custom-age");
+        if (snSelect && ageSelect) {
+            fetch(apiBase + "/analysis-options").then(function(r) { return r.json(); }).then(function(data) {
+                var ageBinsByType = data.age_bins_by_type || {};
+                (data.sn_types || []).forEach(function(st) {
+                    var opt = document.createElement("option");
+                    opt.value = st;
+                    opt.textContent = st;
+                    snSelect.appendChild(opt);
+                });
+                snSelect.addEventListener("change", function() {
+                    ageSelect.innerHTML = "<option value=\"\">— Age —</option>";
+                    var bins = ageBinsByType[snSelect.value] || [];
+                    bins.forEach(function(ab) {
+                        var o = document.createElement("option");
+                        o.value = ab;
+                        o.textContent = ab;
+                        ageSelect.appendChild(o);
+                    });
+                });
+
+                document.getElementById("add-custom-template").addEventListener("click", function() {
+                    var st = snSelect.value;
+                    var ab = ageSelect.value;
+                    if (!st || !ab) return;
+                    var key = templateKey(st, ab);
+                    if (selectedTemplates.has(key)) return;
+                    selectedTemplates.add(key);
+                    var list = document.getElementById("best-match-templates");
+                    var btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "btn btn-sm btn-danger template-btn";
+                    btn.setAttribute("data-sn-type", st);
+                    btn.setAttribute("data-age", ab);
+                    btn.textContent = st + " " + ab;
+                    btn.onclick = function() {
+                        if (selectedTemplates.has(key)) {
+                            selectedTemplates.delete(key);
+                            btn.classList.remove("btn-danger");
+                            btn.classList.add("btn-outline-secondary");
+                        } else {
+                            selectedTemplates.add(key);
+                            btn.classList.remove("btn-outline-secondary");
+                            btn.classList.add("btn-danger");
+                        }
+                        updateVisibleTemplatesList();
+                    };
+                    list.appendChild(btn);
+                    updateVisibleTemplatesList();
+                });
+            });
+        }
+
+        var applyBtn = document.getElementById("apply-overlays-btn");
+        if (applyBtn) applyBtn.addEventListener("click", function() { applyOverlays(); });
+    });
+})();
+</script>
+{% endif %}
 
 <script>
     function clearForm() {

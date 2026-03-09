@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field, AnyUrl, field_validator
+from pydantic import Field, AnyUrl, field_validator, model_validator
 from typing import Optional, List, Dict
 import os
 
@@ -53,11 +53,12 @@ class Settings(BaseSettings):
 
     # ML Model Paths (External data directory)
     user_model_dir: str = Field("/mnt/astrodash-data/user_models", env="ASTRODASH_USER_MODEL_DIR")
-    dash_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/pytorch_model.pth", env="ASTRODASH_DASH_MODEL_PATH")
-    dash_training_params_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/training_params.pickle", env="ASTRODASH_DASH_TRAINING_PARAMS_PATH")
+    dash_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/zeroZ/pytorch_model.pth", env="ASTRODASH_DASH_MODEL_PATH")
+    dash_training_params_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/zeroZ/training_params.pickle", env="ASTRODASH_DASH_TRAINING_PARAMS_PATH")
     transformer_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/transformer/TF_wiserep_v6.pt", env="ASTRODASH_TRANSFORMER_MODEL_PATH")
 
     # Template and Line List Paths (External data directory)
+    # Resolved in model_validator when default path is missing (e.g. dev without /mnt/astrodash-data)
     template_path: str = Field("/mnt/astrodash-data/pre_trained_models/templates/sn_and_host_templates.npz", env="ASTRODASH_TEMPLATE_PATH")
     line_list_path: str = Field("/mnt/astrodash-data/pre_trained_models/templates/sneLineList.txt", env="ASTRODASH_LINE_LIST_PATH")
 
@@ -142,6 +143,22 @@ class Settings(BaseSettings):
         if v not in allowed_values:
             raise ValueError(f"SESSION_COOKIE_SAMESITE must be one of: {allowed_values}")
         return v
+
+    @model_validator(mode="after")
+    def resolve_data_paths_when_missing(self):
+        """When line_list_path or template_path does not exist, use the same relative path
+        under data_dir (pre_trained_models/templates/). Set ASTRODASH_DATA_DIR so the file
+        is found there."""
+        templates_subdir = os.path.join("pre_trained_models", "templates")
+        if not os.path.exists(self.line_list_path):
+            candidate = os.path.join(self.data_dir, templates_subdir, "sneLineList.txt")
+            if os.path.exists(candidate):
+                object.__setattr__(self, "line_list_path", candidate)
+        if not os.path.exists(self.template_path):
+            candidate = os.path.join(self.data_dir, templates_subdir, "sn_and_host_templates.npz")
+            if os.path.exists(candidate):
+                object.__setattr__(self, "template_path", candidate)
+        return self
 
 
 def get_settings() -> Settings:

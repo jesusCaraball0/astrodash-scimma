@@ -12,6 +12,12 @@ class ModelStorage:
     """
     Infrastructure component for managing model file storage and metadata.
     Handles file operations, metadata persistence, and cleanup.
+
+    Storage location is configured via ASTRODASH_USER_MODEL_DIR (default
+    /mnt/astrodash-data/user_models). In Docker, docker-compose mounts the
+    volume astrodash-data at /mnt/astrodash-data, so uploads persist in that
+    volume. Model metadata (name, paths) is stored in the Django DB
+    (UserModelRecord); this class only handles the actual files on disk.
     """
 
     def __init__(self, base_dir: str):

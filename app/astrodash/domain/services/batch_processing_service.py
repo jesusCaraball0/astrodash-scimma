@@ -27,7 +27,7 @@ class BatchProcessingService:
         self.spectrum_service = spectrum_service
         self.classification_service = classification_service
         self.processing_service = processing_service
-        self.supported_extensions = (".fits", ".dat", ".txt", ".lnw", ".csv")
+        self.supported_extensions = (".fits", ".dat", ".txt", ".lnw", ".csv", ".ascii", ".flm")
 
     async def process_batch(
         self,
