@@ -1,6 +1,9 @@
-Fixes #  <!-- If your PR relates to an issue mention it here e.g. Issue #34, Issue #56 -->.
 
-## Description of the Change
+
+## Additional context
+<!-- Add any other context or additional information about the problem here.-->
+
+## Fixes #  <!-- If your PR relates to an issue mention it here e.g. Issue #34, Issue #56 -->.
 
 ## Checklist
 
@@ -15,6 +18,3 @@ Please check all that apply to your proposed changes
 - [ ] Changed django model
 - [ ] Documentation change
 - [ ] Added or changed TaskRunner
-
-### **Additional context**
-<!-- Add any other context or additional information about the problem here.-->
