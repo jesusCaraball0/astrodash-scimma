@@ -1,1 +1,637 @@
-{"openapi":"3.1.0","info":{"title":"Astrodash API","description":"API for processing and classifying supernova spectra.","version":"1.0.0"},"paths":{"/":{"get":{"summary":"Read Root","description":"Root endpoint.","operationId":"read_root__get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/health":{"get":{"summary":"Health Check","description":"Health check endpoint.","operationId":"health_check_health_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/api/osc-references":{"get":{"summary":"Get available OSC references","description":"Get a list of available Open Supernova Catalog (OSC) references.\nThese are used as a source for supernova spectra data.\n\nTODO:\nGet actual list from wis-tns.org","operationId":"get_osc_references_api_osc_references_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/process":{"post":{"summary":"Process Spectrum","operationId":"process_spectrum_process_post","requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_process_spectrum_process_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/analysis-options":{"get":{"summary":"Get Analysis Options","operationId":"get_analysis_options_api_analysis_options_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/api/template-spectrum":{"get":{"summary":"Get Template Spectrum","operationId":"get_template_spectrum_api_template_spectrum_get","parameters":[{"name":"sn_type","in":"query","required":false,"schema":{"type":"string","default":"Ia","title":"Sn Type"}},{"name":"age_bin","in":"query","required":false,"schema":{"type":"string","default":"2 to 6","title":"Age Bin"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/line-list":{"get":{"summary":"Get Line List","description":"Return the element/ion line list for plotting vertical lines.","operationId":"get_line_list_api_line_list_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/api/batch-process":{"post":{"summary":"Batch Process","description":"Accepts a .zip file containing multiple spectrum files, processes and classifies each, and returns results per file.","operationId":"batch_process_api_batch_process_post","requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_batch_process_api_batch_process_post"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/batch-process-multiple":{"post":{"summary":"Batch Process Multiple","description":"Accepts multiple individual spectrum files, processes and classifies each, and returns results per file.","operationId":"batch_process_multiple_api_batch_process_multiple_post","requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_batch_process_multiple_api_batch_process_multiple_post"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/estimate-redshift":{"post":{"summary":"Estimate Redshift","operationId":"estimate_redshift_api_estimate_redshift_post","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}}},"components":{"schemas":{"Body_batch_process_api_batch_process_post":{"properties":{"params":{"type":"string","title":"Params","default":"{}"},"zip_file":{"type":"string","format":"binary","title":"Zip File"}},"type":"object","required":["zip_file"],"title":"Body_batch_process_api_batch_process_post"},"Body_batch_process_multiple_api_batch_process_multiple_post":{"properties":{"params":{"type":"string","title":"Params","default":"{}"},"files":{"items":{"type":"string","format":"binary"},"type":"array","title":"Files"}},"type":"object","required":["files"],"title":"Body_batch_process_multiple_api_batch_process_multiple_post"},"Body_process_spectrum_process_post":{"properties":{"params":{"type":"string","title":"Params","default":"{}"},"file":{"anyOf":[{"type":"string","format":"binary"},{"type":"null"}],"title":"File"}},"type":"object","title":"Body_process_spectrum_process_post"},"HTTPValidationError":{"properties":{"detail":{"items":{"$ref":"#/components/schemas/ValidationError"},"type":"array","title":"Detail"}},"type":"object","title":"HTTPValidationError"},"ValidationError":{"properties":{"loc":{"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array","title":"Location"},"msg":{"type":"string","title":"Message"},"type":{"type":"string","title":"Error Type"}},"type":"object","required":["loc","msg","type"],"title":"ValidationError"}}}}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AstroDash API",
+    "description": "API for processing and classifying supernova spectra using machine learning models.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://astrodash.scimma.org/astrodash/api/v1",
+      "description": "Production"
+    },
+    {
+      "url": "https://astrodash-dev.scimma.org/astrodash/api/v1",
+      "description": "Development"
+    },
+    {
+      "url": "http://localhost:8000/astrodash/api/v1",
+      "description": "Local development"
+    }
+  ],
+  "paths": {
+    "/analysis-options": {
+      "get": {
+        "summary": "Get Analysis Options",
+        "description": "Returns available supernova types and age bins for DASH classification.",
+        "operationId": "getAnalysisOptions",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/template-statistics": {
+      "get": {
+        "summary": "Get Template Statistics",
+        "description": "Returns statistics about available DASH templates.",
+        "operationId": "getTemplateStatistics",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/template-spectrum": {
+      "get": {
+        "summary": "Get Template Spectrum",
+        "description": "Returns a DASH template spectrum for a given supernova type and age bin.",
+        "operationId": "getTemplateSpectrum",
+        "parameters": [
+          {
+            "name": "sn_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "Ia"
+            },
+            "description": "Supernova type"
+          },
+          {
+            "name": "age_bin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "2 to 6"
+            },
+            "description": "Age bin classification"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "array",
+                      "items": { "type": "number" },
+                      "description": "Wavelength values"
+                    },
+                    "y": {
+                      "type": "array",
+                      "items": { "type": "number" },
+                      "description": "Flux values"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Template not found"
+          }
+        }
+      }
+    },
+    "/line-list": {
+      "get": {
+        "summary": "Get Line List",
+        "description": "Returns the complete element/ion line list for plotting vertical line markers.",
+        "operationId": "getLineList",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/line-list/elements": {
+      "get": {
+        "summary": "Get Line List Elements",
+        "description": "Returns a list of available chemical element names.",
+        "operationId": "getLineListElements",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "elements": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/line-list/element/{element}": {
+      "get": {
+        "summary": "Get Line List for Element",
+        "description": "Returns wavelengths for a specific chemical element.",
+        "operationId": "getLineListElement",
+        "parameters": [
+          {
+            "name": "element",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Chemical element symbol (e.g., Fe, O, Si)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "element": { "type": "string" },
+                    "wavelengths": {
+                      "type": "array",
+                      "items": { "type": "number" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Element not found"
+          }
+        }
+      }
+    },
+    "/line-list/filter": {
+      "get": {
+        "summary": "Filter Line List by Wavelength",
+        "description": "Returns spectral lines within a wavelength range.",
+        "operationId": "filterLineList",
+        "parameters": [
+          {
+            "name": "min_wavelength",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number" },
+            "description": "Minimum wavelength in Angstroms"
+          },
+          {
+            "name": "max_wavelength",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number" },
+            "description": "Maximum wavelength in Angstroms"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "min_wavelength": { "type": "number" },
+                    "max_wavelength": { "type": "number" },
+                    "elements": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": { "type": "number" }
+                      }
+                    },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or missing wavelength parameters"
+          }
+        }
+      }
+    },
+    "/process": {
+      "post": {
+        "summary": "Process Spectrum",
+        "description": "Classify a single supernova spectrum from a file upload or OSC reference.",
+        "operationId": "processSpectrum",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Spectrum data file (.fits, .dat, .txt, .lnw, .csv)"
+                  },
+                  "params": {
+                    "type": "string",
+                    "default": "{}",
+                    "description": "JSON string with processing parameters (modelType, oscRef)"
+                  },
+                  "model_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "User model ID (overrides modelType to user_uploaded)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful classification",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters or file"
+          },
+          "500": {
+            "description": "Processing error"
+          }
+        }
+      }
+    },
+    "/estimate-redshift": {
+      "post": {
+        "summary": "Estimate Redshift",
+        "description": "Estimate the redshift of a spectrum using DASH templates.",
+        "operationId": "estimateRedshift",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "sn_type", "age_bin"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "UTF-8 encoded spectrum data file"
+                  },
+                  "sn_type": {
+                    "type": "string",
+                    "description": "Supernova type"
+                  },
+                  "age_bin": {
+                    "type": "string",
+                    "description": "Age bin classification"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful redshift estimation",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required parameters or invalid file"
+          }
+        }
+      }
+    },
+    "/models/upload": {
+      "post": {
+        "summary": "Upload Model",
+        "description": "Upload a TorchScript model with metadata for use in classification.",
+        "operationId": "uploadModel",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file", "class_mapping", "input_shape"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Model file (binary)"
+                  },
+                  "class_mapping": {
+                    "type": "string",
+                    "description": "JSON string of class index to label mappings"
+                  },
+                  "input_shape": {
+                    "type": "string",
+                    "description": "JSON string of expected input shape"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Model name (defaults to filename)"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Model description"
+                  },
+                  "owner": {
+                    "type": "string",
+                    "description": "Model owner identifier"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Model uploaded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "message": { "type": "string" },
+                    "model_id": { "type": "string", "format": "uuid" },
+                    "model_filename": { "type": "string" },
+                    "class_mapping": { "type": "object" },
+                    "output_shape": { "type": "array" },
+                    "input_shape": { "type": "array" },
+                    "model_info": { "type": "object" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing required fields or validation error"
+          }
+        }
+      }
+    },
+    "/models": {
+      "get": {
+        "summary": "List Models",
+        "description": "Returns a list of all available user-uploaded models.",
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{model_id}": {
+      "get": {
+        "summary": "Get Model Info",
+        "description": "Returns detailed information about a specific model.",
+        "operationId": "getModelInfo",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Model identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{model_id}/delete": {
+      "delete": {
+        "summary": "Delete Model",
+        "description": "Delete a user-uploaded model.",
+        "operationId": "deleteModel",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Model identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Model deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/{model_id}/update": {
+      "put": {
+        "summary": "Update Model",
+        "description": "Update metadata for a user-uploaded model.",
+        "operationId": "updateModel",
+        "parameters": [
+          {
+            "name": "model_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" },
+            "description": "Model identifier"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Metadata fields to update"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Model updated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "model_id": { "type": "string", "format": "uuid" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON body"
+          }
+        }
+      }
+    },
+    "/models/owner/{owner}": {
+      "get": {
+        "summary": "List Models by Owner",
+        "description": "Returns models owned by a specific user.",
+        "operationId": "listModelsByOwner",
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Owner identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ModelSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batch-process": {
+      "post": {
+        "summary": "Batch Process",
+        "description": "Process multiple spectrum files. Provide either a ZIP archive or multiple individual files, but not both.",
+        "operationId": "batchProcess",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "zip_file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "ZIP archive containing spectrum files"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "binary" },
+                    "description": "Multiple individual spectrum files"
+                  },
+                  "params": {
+                    "type": "string",
+                    "default": "{}",
+                    "description": "JSON string with processing parameters"
+                  },
+                  "model_id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "User model ID"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful batch processing",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters, or both/neither zip_file and files provided"
+          },
+          "500": {
+            "description": "Batch processing error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ModelSummary": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "owner": { "type": "string" },
+          "description": { "type": "string" },
+          "model_filename": { "type": "string" },
+          "class_mapping": { "type": "object" },
+          "input_shape": { "type": "array" },
+          "meta": { "type": "object" }
+        }
+      }
+    }
+  }
+}
