@@ -167,8 +167,9 @@ class FileSpectrumRepository(SpectrumRepository):
             return None
 
     def _read_text_file(self, file_obj, filename: str) -> Optional[Spectrum]:
-        """Read .dat or .txt file: two-column wavelength/flux, filter 4000–9000 Å."""
+        """Read .dat or .txt file: two-column wavelength/flux, filter 4000-9000 Å."""
         try:
+            import re
             if hasattr(file_obj, 'read'):
                 file_obj.seek(0)
                 content = file_obj.read()
@@ -184,7 +185,8 @@ class FileSpectrumRepository(SpectrumRepository):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                parts = line.split()
+                # Support both space/tab-separated and comma-separated rows in .txt/.dat files.
+                parts = re.split(r'[\s,]+', line)
                 if len(parts) < 2:
                     continue
                 try:
