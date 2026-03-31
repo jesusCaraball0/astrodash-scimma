@@ -384,14 +384,15 @@ def classify(request):
     if request.method == 'GET' and request.session.get('classify_processed'):
         overlay_elements_get = request.GET.getlist('overlay_elements')
         overlay_templates_get = request.GET.getlist('overlay_templates')
-        if overlay_elements_get or overlay_templates_get:
+        overlay_apply_get = request.GET.get('overlay_apply') == '1'
+        if overlay_apply_get or overlay_elements_get or overlay_templates_get:
             stored = request.session['classify_processed']
             try:
                 from types import SimpleNamespace
                 processed = SimpleNamespace(x=stored['x'], y=stored['y'])
             except (KeyError, TypeError):
                 processed = None
-            if processed and (overlay_elements_get or overlay_templates_get):
+            if processed:
                 plot_wave_min = request.session.get('classify_plot_wave_min')
                 plot_wave_max = request.session.get('classify_plot_wave_max')
                 show_templates_section = request.session.get('classify_show_templates_section', False)
