@@ -68,6 +68,11 @@
 
                         <div class="form-group">
                             {{ form.file|as_crispy_field }}
+                            {% if persisted_file_name %}
+                            <small class="form-text text-muted">
+                                Active file: <strong>{{ persisted_file_name }}</strong>
+                            </small>
+                            {% endif %}
                         </div>
 
                         <hr>
