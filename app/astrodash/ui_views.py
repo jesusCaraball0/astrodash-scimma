@@ -26,6 +26,7 @@ from bokeh.plotting import figure
 from bokeh.models import ColumnDataSource, HoverTool, Span, Label
 import json
 import base64
+import hashlib
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 
@@ -142,10 +143,6 @@ def model_selection(request):
     """
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
-    # Clear messages carried over from other pages (e.g. classify/batch processing errors)
-    # so the model selection page doesn't show unrelated errors.
-    list(messages.get_messages(request))
-
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
     form = ModelSelectionForm(request.POST or None, request.FILES or None)
 
@@ -416,6 +413,7 @@ def classify(request):
         if not has_overlay_qs:
             request.session.pop('classify_uploaded_file', None)
             request.session.pop('classify_last_params', None)
+            request.session.pop('classify_input_source_key', None)
             context['persisted_file_name'] = None
 
     # GET with overlay params: re-render plot from session with new overlays (no re-classification)
@@ -521,21 +519,42 @@ def classify(request):
                 'zValue': form.cleaned_data['redshift'],
                 'modelType': model_type if model_type != 'user_uploaded' else 'transformer',  # Fallback for display
             }
+            default_form = ClassifyForm()
+            default_params = {
+                'smoothing': default_form.fields['smoothing'].initial,
+                'minWave': default_form.fields['min_wave'].initial,
+                'maxWave': default_form.fields['max_wave'].initial,
+                'knownZ': bool(default_form.fields['known_z'].initial),
+                'zValue': default_form.fields['redshift'].initial,
+            }
 
+            current_source_key = None
             if supernova_name:
+                current_source_key = f"object:{supernova_name.strip().lower()}"
                 # Source switched to object lookup; clear cached uploaded-file payload.
                 request.session.pop('classify_uploaded_file', None)
             elif uploaded_file:
-                if not injected_cached_file:
+                if injected_cached_file:
+                    current_source_key = (request.session.get('classify_uploaded_file') or {}).get('source_key')
+                else:
                     upload_name = getattr(uploaded_file, 'name', 'uploaded_spectrum.dat')
                     upload_type = getattr(uploaded_file, 'content_type', None) or 'application/octet-stream'
                     file_bytes = uploaded_file.read()
                     uploaded_file.seek(0)
+                    file_hash = hashlib.sha256(file_bytes).hexdigest()
+                    current_source_key = f"file:{file_hash}"
                     request.session['classify_uploaded_file'] = {
                         'name': upload_name,
                         'content_type': upload_type,
                         'content_b64': base64.b64encode(file_bytes).decode('ascii'),
+                        'source_key': current_source_key,
                     }
+
+            previous_source_key = request.session.get('classify_input_source_key')
+            source_changed = bool(previous_source_key and current_source_key and current_source_key != previous_source_key)
+            if source_changed:
+                params.update(default_params)
+            request.session['classify_input_source_key'] = current_source_key
 
             try:
                 # Reuse the service logic
@@ -666,6 +685,18 @@ def classify(request):
                     'available_elements': available_elements,
                     'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
                 })
+                if source_changed:
+                    replacement_form = ClassifyForm(
+                        initial={'supernova_name': supernova_name} if supernova_name else None
+                    )
+                    replacement_form.fields['model'].initial = (
+                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
+                    )
+                    if selected_model_type != 'user_uploaded':
+                        replacement_form.fields['model'].choices = [
+                            c for c in replacement_form.fields['model'].choices if c[0] != 'user_uploaded'
+                        ]
+                    context['form'] = replacement_form
                 
             except AppException as e:
                 messages.error(request, f"Processing Error: {e.message}")

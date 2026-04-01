@@ -4,6 +4,21 @@
 {% block title %}Astrodash{% endblock %}
 
 {% block body %}
+{% if messages %}
+<div id="astrodash-messages" style="position: fixed; top: 84px; left: 50%; transform: translateX(-50%); z-index: 2000; width: min(860px, calc(100% - 32px));">
+    {% for message in messages %}
+    <div
+        class="alert {% if 'error' in message.tags %}alert-danger{% elif 'warning' in message.tags %}alert-warning{% elif 'success' in message.tags %}alert-success{% else %}alert-info{% endif %} alert-dismissible fade show mb-2"
+        role="alert"
+    >
+        {{ message }}
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
 <div class="astrodash-wrapper">
     <!-- Astrodash Sub-navigation or Header could go here if needed -->
     {% block content %}
@@ -17,5 +32,19 @@
 <script src="https://cdn.bokeh.org/bokeh/release/bokeh-widgets-3.3.0.min.js"></script>
 <script src="https://cdn.bokeh.org/bokeh/release/bokeh-tables-3.3.0.min.js"></script>
 <script src="https://cdn.bokeh.org/bokeh/release/bokeh-api-3.3.0.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var alerts = document.querySelectorAll("#astrodash-messages .alert");
+    alerts.forEach(function(alertEl) {
+        setTimeout(function() {
+            if (window.jQuery && window.jQuery.fn && window.jQuery.fn.alert) {
+                window.jQuery(alertEl).alert("close");
+            } else if (alertEl && alertEl.parentNode) {
+                alertEl.parentNode.removeChild(alertEl);
+            }
+        }, 6000);
+    });
+});
+</script>
 {% block extra_scripts %}{% endblock %}
 {% endblock %}
