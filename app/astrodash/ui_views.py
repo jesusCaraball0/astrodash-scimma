@@ -25,6 +25,9 @@ from bokeh.embed import components
 from bokeh.plotting import figure
 from bokeh.models import ColumnDataSource, HoverTool, Span, Label
 import json
+import base64
+import hashlib
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 
 logger = get_logger(__name__)
@@ -140,10 +143,6 @@ def model_selection(request):
     """
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
-    # Clear messages carried over from other pages (e.g. classify/batch processing errors)
-    # so the model selection page doesn't show unrelated errors.
-    list(messages.get_messages(request))
-
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
     form = ModelSelectionForm(request.POST or None, request.FILES or None)
 
@@ -354,7 +353,30 @@ def classify(request):
         messages.warning(request, "Please select an uploaded model again.")
         return HttpResponseRedirect(reverse('astrodash:model_selection') + '?action=classify')
 
-    form = ClassifyForm(request.POST or None, request.FILES or None)
+    form_files = request.FILES or None
+    injected_cached_file = False
+    if request.method == 'POST':
+        posted_supernova_name = (request.POST.get('supernova_name') or '').strip()
+        posted_file = request.FILES.get('file')
+        cached_file = request.session.get('classify_uploaded_file')
+        # Browsers clear file inputs after submit; if the user submits again with no new
+        # source selected, reuse the previously uploaded file from session.
+        if not posted_file and not posted_supernova_name and isinstance(cached_file, dict):
+            try:
+                raw_content = base64.b64decode(cached_file.get('content_b64', ''), validate=True)
+                restored_file = SimpleUploadedFile(
+                    name=cached_file.get('name') or 'uploaded_spectrum.dat',
+                    content=raw_content,
+                    content_type=cached_file.get('content_type') or 'application/octet-stream',
+                )
+                form_files = request.FILES.copy()
+                form_files['file'] = restored_file
+                injected_cached_file = True
+            except Exception:
+                # If cached file restore fails, continue with original request files.
+                form_files = request.FILES or None
+
+    form = ClassifyForm(request.POST or None, form_files)
     # Set the model from session (for validation and display)
     form.fields['model'].initial = (
         'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
@@ -378,20 +400,35 @@ def classify(request):
         'selected_model_type': selected_model_type,
         'selected_model_id': selected_model_id,
         'selected_model_display': selected_model_display,
+        'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
     }
+
+    # Fresh page entry should not keep a previously persisted file/params.
+    if request.method == 'GET':
+        has_overlay_qs = (
+            request.GET.get('overlay_apply') == '1'
+            or bool(request.GET.getlist('overlay_elements'))
+            or bool(request.GET.getlist('overlay_templates'))
+        )
+        if not has_overlay_qs:
+            request.session.pop('classify_uploaded_file', None)
+            request.session.pop('classify_last_params', None)
+            request.session.pop('classify_input_source_key', None)
+            context['persisted_file_name'] = None
 
     # GET with overlay params: re-render plot from session with new overlays (no re-classification)
     if request.method == 'GET' and request.session.get('classify_processed'):
         overlay_elements_get = request.GET.getlist('overlay_elements')
         overlay_templates_get = request.GET.getlist('overlay_templates')
-        if overlay_elements_get or overlay_templates_get:
+        overlay_apply_get = request.GET.get('overlay_apply') == '1'
+        if overlay_apply_get or overlay_elements_get or overlay_templates_get:
             stored = request.session['classify_processed']
             try:
                 from types import SimpleNamespace
                 processed = SimpleNamespace(x=stored['x'], y=stored['y'])
             except (KeyError, TypeError):
                 processed = None
-            if processed and (overlay_elements_get or overlay_templates_get):
+            if processed:
                 plot_wave_min = request.session.get('classify_plot_wave_min')
                 plot_wave_max = request.session.get('classify_plot_wave_max')
                 show_templates_section = request.session.get('classify_show_templates_section', False)
@@ -444,13 +481,25 @@ def classify(request):
                     'overlay_elements': overlay_elements_get,
                     'overlay_templates': overlay_templates_get,
                     'available_elements': available_elements,
+                    'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
                 })
+                last_params = request.session.get('classify_last_params') or {}
+                if last_params:
+                    overlay_form = ClassifyForm(initial=last_params)
+                    overlay_form.fields['model'].initial = (
+                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
+                    )
+                    if selected_model_type != 'user_uploaded':
+                        overlay_form.fields['model'].choices = [
+                            c for c in overlay_form.fields['model'].choices if c[0] != 'user_uploaded'
+                        ]
+                    context['form'] = overlay_form
                 return render(request, 'astrodash/classify.html', context)
             # Fall through to normal render if no overlays or restore failed
 
     if request.method == 'POST':
         if form.is_valid():
-            uploaded_file = request.FILES.get('file')
+            uploaded_file = form_files.get('file') if form_files else None
             supernova_name = form.cleaned_data.get('supernova_name')
 
             # Use model from session, not form (form model field only affects validation)
@@ -470,6 +519,42 @@ def classify(request):
                 'zValue': form.cleaned_data['redshift'],
                 'modelType': model_type if model_type != 'user_uploaded' else 'transformer',  # Fallback for display
             }
+            default_form = ClassifyForm()
+            default_params = {
+                'smoothing': default_form.fields['smoothing'].initial,
+                'minWave': default_form.fields['min_wave'].initial,
+                'maxWave': default_form.fields['max_wave'].initial,
+                'knownZ': bool(default_form.fields['known_z'].initial),
+                'zValue': default_form.fields['redshift'].initial,
+            }
+
+            current_source_key = None
+            if supernova_name:
+                current_source_key = f"object:{supernova_name.strip().lower()}"
+                # Source switched to object lookup; clear cached uploaded-file payload.
+                request.session.pop('classify_uploaded_file', None)
+            elif uploaded_file:
+                if injected_cached_file:
+                    current_source_key = (request.session.get('classify_uploaded_file') or {}).get('source_key')
+                else:
+                    upload_name = getattr(uploaded_file, 'name', 'uploaded_spectrum.dat')
+                    upload_type = getattr(uploaded_file, 'content_type', None) or 'application/octet-stream'
+                    file_bytes = uploaded_file.read()
+                    uploaded_file.seek(0)
+                    file_hash = hashlib.sha256(file_bytes).hexdigest()
+                    current_source_key = f"file:{file_hash}"
+                    request.session['classify_uploaded_file'] = {
+                        'name': upload_name,
+                        'content_type': upload_type,
+                        'content_b64': base64.b64encode(file_bytes).decode('ascii'),
+                        'source_key': current_source_key,
+                    }
+
+            previous_source_key = request.session.get('classify_input_source_key')
+            source_changed = bool(previous_source_key and current_source_key and current_source_key != previous_source_key)
+            if source_changed:
+                params.update(default_params)
+            request.session['classify_input_source_key'] = current_source_key
 
             try:
                 # Reuse the service logic
@@ -530,6 +615,14 @@ def classify(request):
                 request.session['classify_show_templates_section'] = show_templates_section
                 request.session['classify_plot_wave_min'] = plot_wave_min
                 request.session['classify_plot_wave_max'] = plot_wave_max
+                request.session['classify_last_params'] = {
+                    'supernova_name': supernova_name,
+                    'smoothing': params['smoothing'],
+                    'min_wave': params['minWave'],
+                    'max_wave': params['maxWave'],
+                    'known_z': params['knownZ'],
+                    'redshift': params['zValue'],
+                }
 
                 # Overlay state from POST (when user clicked Apply in Customize modal), else empty
                 overlay_elements = request.POST.getlist('overlay_elements') or []
@@ -590,7 +683,20 @@ def classify(request):
                     'overlay_elements': overlay_elements,
                     'overlay_templates': overlay_templates,
                     'available_elements': available_elements,
+                    'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
                 })
+                if source_changed:
+                    replacement_form = ClassifyForm(
+                        initial={'supernova_name': supernova_name} if supernova_name else None
+                    )
+                    replacement_form.fields['model'].initial = (
+                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
+                    )
+                    if selected_model_type != 'user_uploaded':
+                        replacement_form.fields['model'].choices = [
+                            c for c in replacement_form.fields['model'].choices if c[0] != 'user_uploaded'
+                        ]
+                    context['form'] = replacement_form
                 
             except AppException as e:
                 messages.error(request, f"Processing Error: {e.message}")
