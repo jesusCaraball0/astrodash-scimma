@@ -1,0 +1,76 @@
+{
+  "affiliations": [
+    {
+      "name": "Massachusetts Institute of Technology",
+      "order": 0,
+      "members": [
+        {
+          "name": "Daniel Muthukrishna",
+          "description": "",
+          "image": "daniel_muthukrishna.jpg",
+          "order": 0
+        },
+        {
+          "name": "Jesus Caraballo",
+          "description": "",
+          "image": "jesus_caraballo.png",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "name": "University of Illinois at Urbana-Champaign",
+      "order": 1,
+      "members": [
+        {
+          "name": "Gautham Narayan",
+          "description": "",
+          "image": "gautham_narayan.jpg",
+          "order": 0
+        },
+        {
+          "name": "Henna Abunemeh",
+          "description": "",
+          "image": "henna_abunemeh.jpg",
+          "order": 1
+        },
+        {
+          "name": "Scott Koranda",
+          "description": "",
+          "image": "scott_koranda.jpg",
+          "order": 2
+        },
+        {
+          "name": "Andrew Manning",
+          "description": "",
+          "image": "andrew_manning.jpeg",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "name": "Northwestern University",
+      "order": 2,
+      "members": [
+        {
+          "name": "Lanqing Jia",
+          "description": "",
+          "image": "lanqing_jia.png",
+          "order": 1
+        },
+        {
+          "name": "Ruiyao Xu",
+          "description": "",
+          "image": "ruiyao_xu.jpg",
+          "order": 2
+        },
+        {
+          "name": "Noelle Samia",
+          "description": "",
+          "image": "noelle_samia.jpg",
+          "order": 0
+        }
+      ]
+    }
+  ]
+}

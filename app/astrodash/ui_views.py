@@ -5,6 +5,7 @@ from django.http import HttpResponseRedirect, FileResponse, Http404, JsonRespons
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.urls import reverse
 from pathlib import Path
+from types import SimpleNamespace
 
 from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
 from astrodash.services import (
@@ -34,6 +35,9 @@ logger = get_logger(__name__)
 
 # Directory containing logo, favicon, etc. (app/astrodash/static/images/)
 APP_STATIC_IMAGES_DIR = Path(__file__).resolve().parent / "static" / "images"
+
+# Optional team page data (no admin needed). If this file exists, it overrides the database.
+TEAM_MEMBERS_JSON = Path(__file__).resolve().parent / "data" / "team_members.json"
 
 # Safe MIME types for known extensions in that directory
 APP_STATIC_MIME = {
@@ -70,14 +74,53 @@ def landing_page(request):
     return render(request, 'astrodash/index.html')
 
 
+def _team_affiliations_from_json():
+    """Build affiliation/member objects for the template from data/team_members.json."""
+    raw = json.loads(TEAM_MEMBERS_JSON.read_text(encoding="utf-8"))
+    rows = raw.get("affiliations") or []
+    rows = sorted(rows, key=lambda a: (a.get("order", 0), a.get("name") or ""))
+    out = []
+    for aff in rows:
+        name = aff.get("name") or ""
+        aff_ns = SimpleNamespace(name=name)
+        members_in = sorted(
+            aff.get("members") or [],
+            key=lambda m: (m.get("order", 0), m.get("name") or ""),
+        )
+        aff_ns.members = [
+            SimpleNamespace(
+                name=m.get("name") or "",
+                description=(m.get("description") or "").strip(),
+                image=(m.get("image") or "").strip(),
+                affiliation=aff_ns,
+            )
+            for m in members_in
+        ]
+        out.append(aff_ns)
+    return out
+
+
 def team_members(request):
     """
     Renders the Team Members page: affiliations (labs/universities) with
     members (picture, name, description).
+
+    If ``data/team_members.json`` exists, it is the source of truth (good for
+    prod when admin is unavailable). Otherwise rows come from the database.
     """
-    from astrodash.models import TeamAffiliation
-    affiliations = TeamAffiliation.objects.prefetch_related("members").all()
-    return render(request, "astrodash/team_members.html", {"affiliations": affiliations})
+    if TEAM_MEMBERS_JSON.is_file():
+        affiliations = _team_affiliations_from_json()
+        source = "file"
+    else:
+        from astrodash.models import TeamAffiliation
+
+        affiliations = TeamAffiliation.objects.prefetch_related("members").all()
+        source = "database"
+    return render(
+        request,
+        "astrodash/team_members.html",
+        {"affiliations": affiliations, "team_source": source},
+    )
 
 
 @xframe_options_sameorigin
