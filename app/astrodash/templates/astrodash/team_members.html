@@ -1,46 +1,127 @@
 {% extends "astrodash/base.html" %}
 {% load static %}
 
-{% block title %}Team Members — Astrodash{% endblock %}
+{% block title %}Team — Astrodash{% endblock %}
 
 {% block content %}
-<div class="container-fluid py-4 bg-white">
-  <h1 class="mb-4">Team Members</h1>
+<style>
+  .team-page {
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .team-page .page-title {
+    font-size: 1.75rem;
+    font-weight: 600;
+    color: #212529;
+    letter-spacing: -0.02em;
+  }
+  .team-page .page-lead {
+    font-size: 0.95rem;
+    color: #6c757d;
+    max-width: 42rem;
+    line-height: 1.5;
+  }
+  .team-page .institution-heading {
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #6c757d;
+    border-bottom: 1px solid #dee2e6;
+    padding-bottom: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+  .team-page .member-card {
+    height: 100%;
+  }
+  .team-page .member-photo {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    background-color: #e9ecef;
+    border: 1px solid #dee2e6;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .team-page .member-photo img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+  }
+  .team-page .member-name {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #212529;
+    line-height: 1.35;
+    margin-top: 0.65rem;
+    margin-bottom: 0;
+  }
+  .team-page .member-bio {
+    font-size: 0.8125rem;
+    color: #495057;
+    line-height: 1.45;
+    margin-top: 0.35rem;
+    margin-bottom: 0;
+  }
+  @supports not (aspect-ratio: 1 / 1) {
+    .team-page .member-photo {
+      height: 0;
+      padding-bottom: 133.33%;
+    }
+  }
+</style>
+
+<main class="team-page py-4 px-2 px-md-3 bg-white">
+  <header class="mb-4 pb-2 border-bottom border-light">
+    <h1 class="page-title mb-2">AstroDASH Team</h1>
+    <p class="page-lead mb-0">This project is a collaborative effort across various institutions. Listed is our team by affiliations. </p>
+  </header>
 
   {% if not affiliations %}
-  <p class="text-muted">No team affiliations have been added yet. Add affiliations and members via the <a href="{% url 'admin:index' %}">admin</a>.</p>
+  <p class="text-muted">
+    {% if team_source == "file" %}
+    No team affiliations are defined in <code>astrodash/data/team_members.json</code>. Add an <code>affiliations</code> array there, then redeploy.
+    {% else %}
+    No team affiliations have been added yet. Either add <code>astrodash/data/team_members.json</code> in the repo, or use the <a href="{% url 'admin:index' %}">admin</a>.
+    {% endif %}
+  </p>
   {% else %}
   <div class="row">
     {% for affiliation in affiliations %}
-    <div class="col-lg-6 mb-5">
-      <h2 class="h3 font-weight-bold text-dark mb-4">{{ affiliation.name }}</h2>
-      {% for member in affiliation.members.all %}
-      <div class="team-member mb-4">
-        <h3 class="h5 font-weight-bold mb-2" style="color: #2a6496;">{{ member.name }}</h3>
-        <div class="d-flex flex-wrap">
-          {% if member.image %}
-          <div class="mr-3 mb-2">
-            <img
-              src="{% url 'astrodash:app_static_images' member.image %}"
-              alt="{{ member.name }}"
-              class="rounded"
-              style="width: 140px; height: 140px; object-fit: cover;"
-            />
-          </div>
-          {% endif %}
-          <div class="flex-grow-1">
+    <section class="col-lg-4 col-md-6 mb-5 d-flex flex-column" aria-labelledby="team-inst-{{ forloop.counter }}">
+      <h2 id="team-inst-{{ forloop.counter }}" class="institution-heading">{{ affiliation.name }}</h2>
+      <div class="row flex-grow-1">
+        {% for member in affiliation.members %}
+        <div class="col-6 mb-4">
+          <article class="member-card">
+            <div class="member-photo" aria-hidden="{% if member.image %}false{% else %}true{% endif %}">
+              {% if member.image %}
+              <img
+                src="{% url 'astrodash:app_static_images' member.image %}"
+                alt="Portrait of {{ member.name }}"
+                width="280"
+                height="373"
+                loading="lazy"
+              />
+              {% endif %}
+            </div>
+            <h3 class="member-name">{{ member.name }}</h3>
             {% if member.description %}
-            <p class="text-dark mb-0">{{ member.description|linebreaksbr }}</p>
+            <p class="member-bio">{{ member.description|linebreaksbr }}</p>
             {% endif %}
-          </div>
+          </article>
         </div>
+        {% empty %}
+        <p class="text-muted small col-12">No members listed for this affiliation.</p>
+        {% endfor %}
       </div>
-      {% empty %}
-      <p class="text-muted small">No members listed for this affiliation.</p>
-      {% endfor %}
-    </div>
+    </section>
     {% endfor %}
   </div>
   {% endif %}
-</div>
+</main>
 {% endblock %}
