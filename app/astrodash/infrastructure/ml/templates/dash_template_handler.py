@@ -20,8 +20,21 @@ class DASHSpectrumTemplate(SpectrumTemplateInterface):
         self._templates: Optional[Dict[str, Any]] = None
         logger.info(f"DASHSpectrumTemplate initialized with path: {template_path}")
 
-    def get_template_spectrum(self, sn_type: str, age_bin: str) -> Tuple[np.ndarray, np.ndarray]:
-        """Get template spectrum for DASH model."""
+    def get_template_variant_count(self, sn_type: str, age_bin: str) -> int:
+        """How many template spectra exist for this type/age (snInfo rows)."""
+        templates = self._load_templates()
+        if sn_type not in templates or age_bin not in templates[sn_type]:
+            raise TemplateNotFoundException(sn_type, age_bin)
+        entry = templates[sn_type][age_bin]
+        sn_info = entry.get('snInfo', None)
+        if not isinstance(sn_info, np.ndarray) or sn_info.shape[0] == 0:
+            raise TemplateNotFoundException(sn_type, age_bin)
+        return int(sn_info.shape[0])
+
+    def get_template_spectrum(
+        self, sn_type: str, age_bin: str, variant_index: int = 0
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Get one template spectrum for DASH model (variant_index selects among snInfo rows)."""
         try:
             templates = self._load_templates()
 
@@ -37,12 +50,15 @@ class DASHSpectrumTemplate(SpectrumTemplateInterface):
             if not isinstance(sn_info, np.ndarray) or sn_info.shape[0] == 0:
                 raise TemplateNotFoundException(sn_type, age_bin)
 
-            # Get the first template (placeholder for now)
-            template = sn_info[0]
+            n = int(sn_info.shape[0])
+            if variant_index < 0 or variant_index >= n:
+                raise TemplateNotFoundException(sn_type, age_bin)
+
+            template = sn_info[variant_index]
             wave = template[0]
             flux = template[1]
 
-            logger.info(f"Template spectrum loaded for {sn_type} / {age_bin}")
+            logger.info(f"Template spectrum loaded for {sn_type} / {age_bin} variant {variant_index}")
             return wave, flux
 
         except TemplateNotFoundException:

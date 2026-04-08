@@ -476,6 +476,9 @@ def classify(request):
                 plot_wave_max = request.session.get('classify_plot_wave_max')
                 show_templates_section = request.session.get('classify_show_templates_section', False)
                 formatted_results = request.session.get('classify_results', {'best_matches': []})
+                _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
+                request.session['classify_results'] = formatted_results
+                request.session.modified = True
                 display_model_type = request.session.get('classify_model_type', '')
                 element_lines_data = []
                 template_spectra_data = []
@@ -488,15 +491,7 @@ def classify(request):
                 if overlay_templates_get and show_templates_section:
                     template_svc = get_template_analysis_service()
                     for spec in overlay_templates_get:
-                        if not spec or '|' not in spec:
-                            continue
-                        sn_type, age_bin = spec.split('|', 1)
-                        try:
-                            wave, flux = template_svc.template_handler.get_template_spectrum(sn_type, age_bin)
-                            label = f"{sn_type} {age_bin}"
-                            template_spectra_data.append((label, wave, flux))
-                        except Exception:
-                            pass
+                        _append_template_overlay_from_spec(template_svc, spec, template_spectra_data)
                 plot_script, plot_div = _create_bokeh_plot(
                     processed,
                     element_lines=element_lines_data if element_lines_data else None,
@@ -641,6 +636,7 @@ def classify(request):
                 )
                 # Template overlays only available for DASH model (templates are DASH-specific)
                 show_templates_section = classification.model_type == 'dash'
+                _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
 
                 # Store DASH embedding in session for "Find Twins" (only when DASH and embedding present)
                 if classification.model_type == 'dash' and isinstance(classification.results.get('embedding'), list) and len(classification.results['embedding']) == 1024:
@@ -669,7 +665,7 @@ def classify(request):
 
                 # Overlay state from POST (when user clicked Apply in Customize modal), else empty
                 overlay_elements = request.POST.getlist('overlay_elements') or []
-                overlay_templates = request.POST.getlist('overlay_templates') or []  # each item "sn_type|age_bin"
+                overlay_templates = request.POST.getlist('overlay_templates') or []  # sn_type|age_bin or |variant_index
 
                 # Build overlay data and plot
                 element_lines_data = []
@@ -686,15 +682,7 @@ def classify(request):
                     if overlay_templates and show_templates_section:
                         template_svc = get_template_analysis_service()
                         for spec in overlay_templates:
-                            if not spec or '|' not in spec:
-                                continue
-                            sn_type, age_bin = spec.split('|', 1)
-                            try:
-                                wave, flux = template_svc.template_handler.get_template_spectrum(sn_type, age_bin)
-                                label = f"{sn_type} {age_bin}"
-                                template_spectra_data.append((label, wave, flux))
-                            except Exception:
-                                pass
+                            _append_template_overlay_from_spec(template_svc, spec, template_spectra_data)
 
                 # 4. Generate Plot (with overlays if any)
                 plot_script, plot_div = _create_bokeh_plot(
@@ -887,6 +875,60 @@ def _format_batch_results(results, params):
         formatted[filename] = formatted_item
         
     return formatted
+
+
+def _parse_overlay_template_spec(spec: str):
+    """
+    Parse overlay_templates entry: 'sn_type|age_bin' or 'sn_type|age_bin|variant_index'.
+    If the last segment is all digits, it is treated as a 0-based variant index.
+    """
+    if not spec or '|' not in spec:
+        return None
+    parts = spec.split('|')
+    if len(parts) < 2:
+        return None
+    last = parts[-1]
+    if last.isdigit():
+        sn_type = parts[0]
+        age_bin = '|'.join(parts[1:-1])
+        variant_index = int(last)
+        return sn_type, age_bin, variant_index
+    return parts[0], '|'.join(parts[1:]), 0
+
+
+def _append_template_overlay_from_spec(template_svc, spec, template_spectra_data):
+    parsed = _parse_overlay_template_spec(spec)
+    if not parsed:
+        return
+    sn_type, age_bin, variant_index = parsed
+    try:
+        wave, flux = template_svc.template_handler.get_template_spectrum(
+            sn_type, age_bin, variant_index=variant_index
+        )
+        label = f"{sn_type} {age_bin}"
+        if variant_index:
+            label = f"{label} (#{variant_index + 1})"
+        template_spectra_data.append((label, wave, flux))
+    except Exception:
+        pass
+
+
+def _annotate_best_match_template_variant_counts(results: dict, enabled: bool) -> None:
+    """Attach template_variant_count to each best match (DASH snInfo row count)."""
+    matches = results.get('best_matches') or []
+    if not matches:
+        return
+    if not enabled:
+        return
+    template_svc = get_template_analysis_service()
+    handler = template_svc.template_handler
+    for m in matches:
+        try:
+            n = handler.get_template_variant_count(m['type'], m['age'])
+            m['template_variant_count'] = max(1, int(n))
+        except Exception:
+            m['template_variant_count'] = 1
+
 
 # Colors for element-line and template overlays (consistent palette)
 _PLOT_OVERLAY_COLORS = [

@@ -83,9 +83,15 @@ def template_statistics(request):
 def template_spectrum(request):
     sn_type = request.GET.get("sn_type", "Ia")
     age_bin = request.GET.get("age_bin", "2 to 6")
+    try:
+        variant_index = int(request.GET.get("variant_index", "0"))
+    except (TypeError, ValueError):
+        variant_index = 0
     service = get_template_analysis_service()
     try:
-        wave, flux = service.template_handler.get_template_spectrum(sn_type, age_bin)
+        wave, flux = service.template_handler.get_template_spectrum(
+            sn_type, age_bin, variant_index=variant_index
+        )
         return JsonResponse({"x": wave.tolist(), "y": flux.tolist()})
     except TemplateNotFoundException as exc:
         return _json_error(exc.message, status=exc.status_code)

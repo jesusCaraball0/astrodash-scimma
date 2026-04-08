@@ -16,19 +16,29 @@ class SpectrumTemplateInterface(ABC):
     """
 
     @abstractmethod
-    def get_template_spectrum(self, sn_type: str, age_bin: str) -> Tuple[np.ndarray, np.ndarray]:
+    def get_template_spectrum(
+        self, sn_type: str, age_bin: str, variant_index: int = 0
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Get template spectrum for given SN type and age bin.
 
         Args:
             sn_type: Supernova type (e.g., 'Ia', 'II')
             age_bin: Age bin identifier
+            variant_index: Which template instance when multiple exist for this type/age (0-based)
 
         Returns:
             Tuple of (wavelength_array, flux_array)
 
         Raises:
             TemplateNotFoundException: If template is not found
+        """
+        pass
+
+    @abstractmethod
+    def get_template_variant_count(self, sn_type: str, age_bin: str) -> int:
+        """
+        Number of template spectra available for this SN type and age bin (at least 1 when valid).
         """
         pass
 

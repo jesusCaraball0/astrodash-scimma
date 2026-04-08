@@ -205,7 +205,7 @@
                 </div>
                 <div class="card-body">
                     <p><strong>Model Used:</strong> {{ model_type }}</p>
-                    <table class="table table-striped table-hover" id="best-matches-table">
+                    <table class="table table-striped" id="best-matches-table">
                         <thead>
                             <tr>
                                 <th>SN Type</th>
@@ -213,11 +213,14 @@
                                 <th>Probability</th>
                                 <th>Redshift</th>
                                 <th>Reliable</th>
+                                {% if show_templates_section %}
+                                <th scope="col">Plot template</th>
+                                {% endif %}
                             </tr>
                         </thead>
                         <tbody>
                             {% for match in results.best_matches %}
-                            <tr class="best-match-row" data-sn-type="{{ match.type }}" data-age="{{ match.age }}">
+                            <tr>
                                 <td><span class="badge badge-info">{{ match.type }}</span></td>
                                 <td>{{ match.age }}</td>
                                 <td>{{ match.formatted_probability }}</td>
@@ -229,6 +232,27 @@
                                     <span class="badge badge-warning">No</span>
                                     {% endif %}
                                 </td>
+                                {% if show_templates_section %}
+                                <td class="best-match-template-cell"
+                                    data-sn-type="{{ match.type }}"
+                                    data-age="{{ match.age }}"
+                                    data-variant-count="{{ match.template_variant_count|default:1 }}"
+                                    data-variant-index="0">
+                                    <div class="d-flex align-items-center flex-wrap">
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-secondary best-match-template-toggle mb-1 flex-shrink-0"
+                                                aria-pressed="false"
+                                                aria-label="Toggle DASH template overlay on plot for {{ match.type }} {{ match.age }}">
+                                            Off
+                                        </button>
+                                        <div class="btn-group btn-group-sm best-match-variant-nav ml-4 mb-1" role="group" aria-label="Template variant for {{ match.type }} {{ match.age }}">
+                                            <button type="button" class="btn btn-outline-secondary best-match-variant-prev" aria-label="Previous template" disabled>&#8249;</button>
+                                            <span class="btn btn-sm btn-light disabled best-match-variant-label px-2 text-monospace small">1 / 1</span>
+                                            <button type="button" class="btn btn-outline-secondary best-match-variant-next" aria-label="Next template" disabled>&#8250;</button>
+                                        </div>
+                                    </div>
+                                </td>
+                                {% endif %}
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -268,7 +292,6 @@
         classifyUrl: "{{ request.path|escapejs }}",
         analysisOptionsUrl: "{% url 'astrodash_api:analysis_options' %}"
     };
-    var twinsBaseUrl = "{% url 'astrodash:dash_twins' %}";
     var initialElements = [];
     var initialTemplates = [];
     var elEl = document.getElementById("initial-overlay-elements");
@@ -279,8 +302,39 @@
     var selectedElements = new Set(initialElements);
     var selectedTemplates = new Set(initialTemplates);
 
-    function templateKey(snType, age) { return snType + "|" + age; }
-    function templateKeyDisplay(snType, age) { return snType + " " + age; }
+    function templateKeyWithVariant(snType, age, idx) {
+        idx = idx || 0;
+        if (idx <= 0) return snType + "|" + age;
+        return snType + "|" + age + "|" + idx;
+    }
+    function templateKey(snType, age) { return templateKeyWithVariant(snType, age, 0); }
+
+    function parseOverlayKeyParts(k) {
+        var parts = k.split("|");
+        if (parts.length < 2) return { snType: "", age: "", variant: 0 };
+        var last = parts[parts.length - 1];
+        var hasVar = /^\d+$/.test(last);
+        if (hasVar && parts.length >= 3) {
+            return {
+                snType: parts[0],
+                age: parts.slice(1, -1).join("|"),
+                variant: parseInt(last, 10)
+            };
+        }
+        return { snType: parts[0], age: parts.slice(1).join("|"), variant: 0 };
+    }
+
+    function selectedTemplateKeyForRow(snType, age) {
+        return Array.from(selectedTemplates).find(function(k) {
+            var meta = parseOverlayKeyParts(k);
+            return meta.snType === snType && meta.age === age;
+        }) || null;
+    }
+
+    function rowVariantFromKey(key) {
+        if (!key) return 0;
+        return parseOverlayKeyParts(key).variant;
+    }
 
     function applyOverlays() {
         var params = ["overlay_apply=1"];
@@ -337,23 +391,113 @@
             container.innerHTML = "<span class=\"text-muted small\">No element list available. Check line list file path.</span>";
         }
 
+        function updateVariantArrowsUI(cell) {
+            var count = parseInt(cell.getAttribute("data-variant-count"), 10) || 1;
+            var idx = parseInt(cell.getAttribute("data-variant-index"), 10) || 0;
+            if (idx >= count) {
+                idx = Math.max(0, count - 1);
+                cell.setAttribute("data-variant-index", String(idx));
+            }
+            var label = cell.querySelector(".best-match-variant-label");
+            var prev = cell.querySelector(".best-match-variant-prev");
+            var next = cell.querySelector(".best-match-variant-next");
+            var group = cell.querySelector(".best-match-variant-nav");
+            if (!label || !prev || !next || !group) return;
+            if (count <= 1) {
+                group.style.display = "none";
+                return;
+            }
+            group.style.display = "";
+            label.textContent = (idx + 1) + " / " + count;
+            prev.disabled = idx <= 0;
+            next.disabled = idx >= count - 1;
+        }
+
+        function navigateWithTemplateSet(templatesToApply) {
+            var params = ["overlay_apply=1"];
+            selectedElements.forEach(function(el) {
+                params.push("overlay_elements=" + encodeURIComponent(el));
+            });
+            templatesToApply.forEach(function(k) {
+                params.push("overlay_templates=" + encodeURIComponent(k));
+            });
+            var qs = params.length ? "?" + params.join("&") : "";
+            window.location.href = plotConfig.classifyUrl + qs;
+        }
+
+        function navigateToggleRowTemplate(cell) {
+            var snType = cell.getAttribute("data-sn-type");
+            var age = cell.getAttribute("data-age");
+            if (!snType || !age) return;
+            var templatesToApply = new Set(selectedTemplates);
+            var existing = selectedTemplateKeyForRow(snType, age);
+            if (existing) {
+                templatesToApply.delete(existing);
+            } else {
+                var idx = parseInt(cell.getAttribute("data-variant-index"), 10) || 0;
+                templatesToApply.add(templateKeyWithVariant(snType, age, idx));
+            }
+            navigateWithTemplateSet(templatesToApply);
+        }
+
+        function navigateRowVariant(cell, newIdx) {
+            var snType = cell.getAttribute("data-sn-type");
+            var age = cell.getAttribute("data-age");
+            var count = parseInt(cell.getAttribute("data-variant-count"), 10) || 1;
+            if (newIdx < 0 || newIdx >= count) return;
+            var existing = selectedTemplateKeyForRow(snType, age);
+            cell.setAttribute("data-variant-index", String(newIdx));
+            updateVariantArrowsUI(cell);
+            if (!existing) return;
+            var templatesToApply = new Set(selectedTemplates);
+            templatesToApply.delete(existing);
+            templatesToApply.add(templateKeyWithVariant(snType, age, newIdx));
+            navigateWithTemplateSet(templatesToApply);
+        }
+
+        function syncBestMatchTemplateToggleButtons() {
+            document.querySelectorAll(".best-match-template-cell").forEach(function(cell) {
+                var snType = cell.getAttribute("data-sn-type");
+                var age = cell.getAttribute("data-age");
+                var toggle = cell.querySelector(".best-match-template-toggle");
+                if (!toggle || !snType || !age) return;
+                var existing = selectedTemplateKeyForRow(snType, age);
+                var on = !!existing;
+                toggle.setAttribute("aria-pressed", on ? "true" : "false");
+                toggle.textContent = on ? "On" : "Off";
+                toggle.classList.toggle("btn-danger", on);
+                toggle.classList.toggle("btn-outline-secondary", !on);
+                if (existing) {
+                    cell.setAttribute("data-variant-index", String(rowVariantFromKey(existing)));
+                }
+                updateVariantArrowsUI(cell);
+            });
+        }
+
+        function overlayListLabel(k) {
+            var meta = parseOverlayKeyParts(k);
+            var base = meta.snType + " " + meta.age;
+            if (meta.variant > 0) return base + " (#" + (meta.variant + 1) + ")";
+            return base;
+        }
+
         if (document.querySelectorAll(".template-btn").length) {
             document.querySelectorAll(".template-btn").forEach(function(btn) {
                 var snType = btn.getAttribute("data-sn-type");
                 var age = btn.getAttribute("data-age");
-                var key = templateKey(snType, age);
-                var isSelected = selectedTemplates.has(key);
+                var isSelected = !!selectedTemplateKeyForRow(snType, age);
                 if (isSelected) {
                     btn.classList.remove("btn-outline-secondary");
                     btn.classList.add("btn-danger");
                 }
                 btn.onclick = function() {
-                    if (selectedTemplates.has(key)) {
-                        selectedTemplates.delete(key);
+                    var ex = selectedTemplateKeyForRow(snType, age);
+                    if (ex) {
+                        selectedTemplates.delete(ex);
                         btn.classList.remove("btn-danger");
                         btn.classList.add("btn-outline-secondary");
                     } else {
-                        selectedTemplates.add(key);
+                        selectedTemplates.add(templateKey(snType, age));
                         btn.classList.remove("btn-outline-secondary");
                         btn.classList.add("btn-danger");
                     }
@@ -367,55 +511,54 @@
             if (!ul) return;
             ul.innerHTML = "";
             selectedTemplates.forEach(function(k) {
-                var parts = k.split("|", 2);
-                var label = parts[0] + " " + (parts[1] || "");
+                var meta = parseOverlayKeyParts(k);
                 var li = document.createElement("li");
                 li.className = "list-group-item d-flex justify-content-between align-items-center";
-                li.textContent = label;
+                li.textContent = overlayListLabel(k);
                 var rm = document.createElement("button");
                 rm.type = "button";
                 rm.className = "btn btn-sm btn-outline-danger";
                 rm.textContent = "Remove";
                 rm.onclick = function() {
                     selectedTemplates.delete(k);
-                    var btn = document.querySelector(".template-btn[data-sn-type='" + parts[0] + "'][data-age='" + (parts[1] || "") + "']");
-                    if (btn) {
-                        btn.classList.remove("btn-danger");
-                        btn.classList.add("btn-outline-secondary");
+                    var tbtn = document.querySelector(
+                        ".template-btn[data-sn-type='" + meta.snType + "'][data-age='" + meta.age + "']"
+                    );
+                    if (tbtn) {
+                        tbtn.classList.remove("btn-danger");
+                        tbtn.classList.add("btn-outline-secondary");
                     }
                     updateVisibleTemplatesList();
                 };
                 li.appendChild(rm);
                 ul.appendChild(li);
             });
+            syncBestMatchTemplateToggleButtons();
         }
+
         updateVisibleTemplatesList();
 
-        function applyOverlaysWithPreviewTemplate(previewKey) {
-            var params = ["overlay_apply=1"];
-            selectedElements.forEach(function(el) {
-                params.push("overlay_elements=" + encodeURIComponent(el));
-            });
-            var templatesToApply = new Set(selectedTemplates);
-            if (previewKey) {
-                if (templatesToApply.has(previewKey)) templatesToApply.delete(previewKey);
-                else templatesToApply.add(previewKey);
+        document.querySelectorAll(".best-match-template-cell").forEach(function(cell) {
+            var toggle = cell.querySelector(".best-match-template-toggle");
+            if (toggle) {
+                toggle.addEventListener("click", function() {
+                    navigateToggleRowTemplate(cell);
+                });
             }
-            templatesToApply.forEach(function(k) {
-                params.push("overlay_templates=" + encodeURIComponent(k));
-            });
-            var qs = params.length ? "?" + params.join("&") : "";
-            window.location.href = plotConfig.classifyUrl + qs;
-        }
-
-        document.querySelectorAll("#best-matches-table .best-match-row").forEach(function(row) {
-            var snType = row.getAttribute("data-sn-type");
-            var age = row.getAttribute("data-age");
-            if (!snType || !age) return;
-            row.addEventListener("mouseenter", function() {
-                var key = templateKey(snType, age);
-                applyOverlaysWithPreviewTemplate(key);
-            });
+            var prev = cell.querySelector(".best-match-variant-prev");
+            var next = cell.querySelector(".best-match-variant-next");
+            if (prev) {
+                prev.addEventListener("click", function() {
+                    var idx = parseInt(cell.getAttribute("data-variant-index"), 10) || 0;
+                    navigateRowVariant(cell, idx - 1);
+                });
+            }
+            if (next) {
+                next.addEventListener("click", function() {
+                    var idx = parseInt(cell.getAttribute("data-variant-index"), 10) || 0;
+                    navigateRowVariant(cell, idx + 1);
+                });
+            }
         });
 
         var snSelect = document.getElementById("custom-sn-type");
@@ -444,8 +587,8 @@
                     var st = snSelect.value;
                     var ab = ageSelect.value;
                     if (!st || !ab) return;
+                    if (selectedTemplateKeyForRow(st, ab)) return;
                     var key = templateKey(st, ab);
-                    if (selectedTemplates.has(key)) return;
                     selectedTemplates.add(key);
                     var list = document.getElementById("best-match-templates");
                     var btn = document.createElement("button");
@@ -455,12 +598,13 @@
                     btn.setAttribute("data-age", ab);
                     btn.textContent = st + " " + ab;
                     btn.onclick = function() {
-                        if (selectedTemplates.has(key)) {
-                            selectedTemplates.delete(key);
+                        var ex = selectedTemplateKeyForRow(st, ab);
+                        if (ex) {
+                            selectedTemplates.delete(ex);
                             btn.classList.remove("btn-danger");
                             btn.classList.add("btn-outline-secondary");
                         } else {
-                            selectedTemplates.add(key);
+                            selectedTemplates.add(templateKey(st, ab));
                             btn.classList.remove("btn-outline-secondary");
                             btn.classList.add("btn-danger");
                         }
@@ -480,8 +624,11 @@
         if (findTwinsBtn && twinsIframe) {
             findTwinsBtn.addEventListener("click", function(e) {
                 e.preventDefault();
-                twinsIframe.src = twinsBaseUrl + "?user_query=1";
                 $("#twins-tab").tab("show");
+                twinsIframe.contentWindow.postMessage(
+                    { type: "astrodash-find-twins" },
+                    window.location.origin
+                );
             });
         }
     });

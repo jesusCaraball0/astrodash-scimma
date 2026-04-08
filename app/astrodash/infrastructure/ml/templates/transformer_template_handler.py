@@ -20,9 +20,14 @@ class TransformerSpectrumTemplate(SpectrumTemplateInterface):
     def __init__(self):
         logger.info("TransformerSpectrumTemplate initialized")
 
-    def get_template_spectrum(self, sn_type: str, age_bin: str) -> Tuple[np.ndarray, np.ndarray]:
+    def get_template_spectrum(
+        self, sn_type: str, age_bin: str, variant_index: int = 0
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Get template spectrum for Transformer model (not supported)."""
         raise TemplateNotFoundException(sn_type, age_bin)
+
+    def get_template_variant_count(self, sn_type: str, age_bin: str) -> int:
+        return 1
 
     def get_all_templates(self) -> Dict[str, Any]:
         """Get all Transformer templates (empty for now)."""

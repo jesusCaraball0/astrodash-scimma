@@ -23,6 +23,7 @@ services:
     volumes:
       - django-static:/static
       - ../nginx/default_slim.conf:/etc/nginx/conf.d/default.conf
+      - astrodash-data:/mnt/astrodash-data:ro
 
   app:
     extends:

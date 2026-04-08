@@ -159,30 +159,36 @@
 
 <script>
 (async function() {
+  const TWINS_DATA_URL = "{% url 'astrodash:dash_twins_data' %}";
   const TWINS_SEARCH_URL = "{% url 'astrodash:twins_search' %}";
   const plotSpinner = document.getElementById("plotSpinner");
   function showSpinner() { plotSpinner.classList.remove("hidden"); }
   function hideSpinner() { plotSpinner.classList.add("hidden"); }
 
   showSpinner();
-  const PAYLOAD = await fetch("{% url 'astrodash:dash_twins_data' %}").then(r => r.json());
+  const payloadPromise = fetch(TWINS_DATA_URL).then((r) => r.json());
 
-  const isUserQuery = new URLSearchParams(window.location.search).get('user_query') === '1';
-  let userQueryResult = null;
-  if (isUserQuery) {
+  async function fetchUserTwinsSearch() {
     try {
       const resp = await fetch(TWINS_SEARCH_URL + "?k=50", { credentials: "same-origin" });
       const data = await resp.json().catch(() => ({}));
-      if (resp.ok && !data.error) {
-        userQueryResult = data;
-      } else {
-        userQueryResult = { error: data.error || "Twins search failed." };
-      }
+      if (resp.ok && !data.error) return data;
+      return { error: data.error || "Twins search failed." };
     } catch (e) {
       console.warn("Twins search request failed:", e);
-      userQueryResult = { error: "Request failed. Classify a spectrum with DASH first." };
+      return { error: "Request failed. Classify a spectrum with DASH first." };
     }
   }
+
+  const isUserQuery = new URLSearchParams(window.location.search).get("user_query") === "1";
+  let userQueryResult = null;
+
+  const PAYLOAD = await payloadPromise;
+
+  if (isUserQuery) {
+    userQueryResult = await fetchUserTwinsSearch();
+  }
+
   hideSpinner();
 
 const N = PAYLOAD.N;
@@ -709,19 +715,53 @@ function renderUserQueryMode() {
   Plotly.react("specplot", specTraces.length ? specTraces : [], specLayout(), {responsive: true});
 }
 
+let userQueryErrorBannerEl = null;
+function setUserQueryErrorBanner(msg) {
+  const banner = document.querySelector(".banner");
+  if (!banner || !msg) return;
+  if (!userQueryErrorBannerEl) {
+    userQueryErrorBannerEl = document.createElement("div");
+    userQueryErrorBannerEl.style.gridColumn = "1 / -1";
+    userQueryErrorBannerEl.style.color = "#c00";
+    userQueryErrorBannerEl.style.fontSize = "13px";
+    banner.appendChild(userQueryErrorBannerEl);
+  }
+  userQueryErrorBannerEl.textContent = msg;
+}
+function clearUserQueryErrorBanner() {
+  if (userQueryErrorBannerEl && userQueryErrorBannerEl.parentNode) {
+    userQueryErrorBannerEl.parentNode.removeChild(userQueryErrorBannerEl);
+    userQueryErrorBannerEl = null;
+  }
+}
+
 if (userQueryResult && !userQueryResult.error) {
   renderUserQueryMode();
 } else if (isUserQuery) {
-  const banner = document.querySelector(".banner");
-  if (banner) {
-    const msg = document.createElement("div");
-    msg.style.gridColumn = "1 / -1";
-    msg.style.color = "#c00";
-    msg.style.fontSize = "13px";
-    msg.textContent = userQueryResult && userQueryResult.error ? userQueryResult.error : "Classify a spectrum with DASH first to see your point and twins here.";
-    banner.appendChild(msg);
-  }
+  const msg = userQueryResult && userQueryResult.error
+    ? userQueryResult.error
+    : "Classify a spectrum with DASH first to see your point and twins here.";
+  setUserQueryErrorBanner(msg);
 }
+
+window.addEventListener("message", async (event) => {
+  if (event.source !== window.parent || event.origin !== window.location.origin) return;
+  if (!event.data || event.data.type !== "astrodash-find-twins") return;
+  showSpinner();
+  try {
+    await payloadPromise;
+    userQueryResult = await fetchUserTwinsSearch();
+    if (userQueryResult.error) {
+      clearUserQueryErrorBanner();
+      setUserQueryErrorBanner(userQueryResult.error);
+    } else {
+      clearUserQueryErrorBanner();
+      renderUserQueryMode();
+    }
+  } finally {
+    hideSpinner();
+  }
+});
 
 })();
 </script>
