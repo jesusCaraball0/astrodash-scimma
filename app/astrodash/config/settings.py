@@ -3,6 +3,7 @@ from pydantic import Field, AnyUrl, field_validator, model_validator
 from typing import Optional, List, Dict
 import os
 
+
 class Settings(BaseSettings):
     # General
     app_name: str = Field("AstroDash API", env="ASTRODASH_APP_NAME")
@@ -15,7 +16,8 @@ class Settings(BaseSettings):
     cors_origins: List[str] = Field(["*"], env="ASTRODASH_CORS_ORIGINS")    # Allow all origins for API usage
 
     # Security Settings
-    secret_key: str = Field("your-super-secret-key-here-make-it-very-long-and-secure-32-chars-min", env="ASTRODASH_SECRET_KEY")
+    secret_key: str = Field("your-super-secret-key-here-make-it-very-long-and-secure-32-chars-min",
+                            env="ASTRODASH_SECRET_KEY")
     access_token_expire_minutes: int = Field(60 * 24, env="ASTRODASH_ACCESS_TOKEN_EXPIRE_MINUTES")
 
     # Rate Limiting
@@ -53,14 +55,19 @@ class Settings(BaseSettings):
 
     # ML Model Paths (External data directory)
     user_model_dir: str = Field("/mnt/astrodash-data/user_models", env="ASTRODASH_USER_MODEL_DIR")
-    dash_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/zeroZ/pytorch_model.pth", env="ASTRODASH_DASH_MODEL_PATH")
-    dash_training_params_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/zeroZ/training_params.pickle", env="ASTRODASH_DASH_TRAINING_PARAMS_PATH")
-    transformer_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/transformer/TF_wiserep_v6.pt", env="ASTRODASH_TRANSFORMER_MODEL_PATH")
+    dash_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/zeroZ/pytorch_model.pth",
+                                 env="ASTRODASH_DASH_MODEL_PATH")
+    dash_training_params_path: str = Field("/mnt/astrodash-data/pre_trained_models/dash/zeroZ/training_params.pickle",
+                                           env="ASTRODASH_DASH_TRAINING_PARAMS_PATH")
+    transformer_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/transformer/TF_wiserep_v6.pt",
+                                        env="ASTRODASH_TRANSFORMER_MODEL_PATH")
 
     # Template and Line List Paths (External data directory)
     # Resolved in model_validator when default path is missing (e.g. dev without /mnt/astrodash-data)
-    template_path: str = Field("/mnt/astrodash-data/pre_trained_models/templates/sn_and_host_templates.npz", env="ASTRODASH_TEMPLATE_PATH")
-    line_list_path: str = Field("/mnt/astrodash-data/pre_trained_models/templates/sneLineList.txt", env="ASTRODASH_LINE_LIST_PATH")
+    template_path: str = Field("/mnt/astrodash-data/pre_trained_models/templates/sn_and_host_templates.npz",
+                               env="ASTRODASH_TEMPLATE_PATH")
+    line_list_path: str = Field("/mnt/astrodash-data/pre_trained_models/templates/sneLineList.txt",
+                                env="ASTRODASH_LINE_LIST_PATH")
 
     # ML Configuration Parameters
     # DASH model parameters

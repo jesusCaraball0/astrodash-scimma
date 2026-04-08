@@ -1,6 +1,5 @@
 from django.shortcuts import render
 from django.contrib import messages
-from django.conf import settings
 from django.http import HttpResponseRedirect, FileResponse, Http404, JsonResponse
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.urls import reverse
@@ -30,13 +29,12 @@ import base64
 import hashlib
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-
 logger = get_logger(__name__)
 
 # Directory containing logo, favicon, etc. (app/astrodash/static/images/)
 APP_STATIC_IMAGES_DIR = Path(__file__).resolve().parent / "static" / "images"
 
-# Optional team page data (no admin needed). If this file exists, it overrides the database.
+# File containing team member information.
 TEAM_MEMBERS_JSON = Path(__file__).resolve().parent / "data" / "team_members.json"
 
 # Safe MIME types for known extensions in that directory
@@ -133,7 +131,8 @@ def dash_twins_data(request):
     """
     path = Path(get_config().data_dir) / "explorer" / "dash_twins_payload.json"
     if not path.is_file():
-        raise Http404("DASH Twins data not found. Run extract_payload.py --build-artifacts and ensure files are in ASTRODASH_DATA_DIR/explorer/.")
+        raise Http404("DASH Twins data not found. Run extract_payload.py --build-artifacts "
+                      "and ensure files are in ASTRODASH_DATA_DIR/explorer/.")
     return FileResponse(
         open(path, "rb"),
         content_type="application/json",
@@ -219,7 +218,8 @@ def model_selection(request):
                 model_file = request.FILES.get('model_file')
                 if not model_file:
                     logger.warning("Model upload attempted but no 'model_file' in request.FILES")
-                    messages.error(request, "No file was received. Ensure the form uses enctype='multipart/form-data' and you selected a file.")
+                    messages.error(request, "No file was received. Ensure the form uses enctype='multipart/form-data' "
+                                   "and you selected a file.")
                     return render(
                         request,
                         'astrodash/model_selection.html',
@@ -234,7 +234,7 @@ def model_selection(request):
                 input_shape = form.cleaned_data.get('input_shape')
                 model_name = form.cleaned_data.get('model_name')
                 model_description = form.cleaned_data.get('model_description')
-                
+
                 try:
                     model_service = get_model_service()
                     model_content = model_file.read()
@@ -258,7 +258,8 @@ def model_selection(request):
                     if model_info.get("validation_passed") is False:
                         messages.warning(
                             request,
-                            "Forward-pass validation failed (dummy run had a shape mismatch). You can still use this model for classification—real inputs may work."
+                            "Forward-pass validation failed (dummy run had a shape mismatch). You can still use this "
+                            "model for classification—real inputs may work."
                         )
 
                     # After upload, refresh the list of existing models and stay on this page
@@ -346,7 +347,7 @@ def model_selection(request):
                 # Store selected model type in session
                 request.session['selected_model_type'] = model_type
                 request.session.pop('selected_model_id', None)  # Clear any previous user model
-            
+
             # Redirect to the appropriate page
             if action_type == 'batch':
                 return HttpResponseRedirect(reverse('astrodash:batch_process_ui'))
@@ -368,6 +369,7 @@ def model_selection(request):
         'show_upload_section': show_upload_section,
     }
     return render(request, 'astrodash/model_selection.html', context)
+
 
 def classify(request):
     """
@@ -583,7 +585,8 @@ def classify(request):
                     }
 
             previous_source_key = request.session.get('classify_input_source_key')
-            source_changed = bool(previous_source_key and current_source_key and current_source_key != previous_source_key)
+            source_changed = bool(
+                previous_source_key and current_source_key and current_source_key != previous_source_key)
             if source_changed:
                 params.update(default_params)
             request.session['classify_input_source_key'] = current_source_key
@@ -593,20 +596,20 @@ def classify(request):
                 spectrum_service = get_spectrum_service()
                 processing_service = get_spectrum_processing_service()
                 classification_service = get_classification_service()
-                
+
                 # 1. Read Spectrum
                 # If file is provided, use it. Otherwise use supernova_name (osc_ref)
                 spectrum = async_to_sync(spectrum_service.get_spectrum_data)(
-                    file=uploaded_file, 
+                    file=uploaded_file,
                     osc_ref=supernova_name
                 )
-                
+
                 # 2. Process Spectrum
                 processed = async_to_sync(processing_service.process_spectrum_with_params)(
                     spectrum=spectrum,
                     params=params,
                 )
-                
+
                 # 3. Classify
                 classification = async_to_sync(classification_service.classify_spectrum)(
                     spectrum=processed,
@@ -614,7 +617,7 @@ def classify(request):
                     user_model_id=selected_model_id,
                     params=params,
                 )
-                
+
                 # Wavelength range for plot customization (element lines, etc.)
                 plot_wave_min = float(min(processed.x)) if hasattr(processed, 'x') and len(processed.x) else None
                 plot_wave_max = float(max(processed.x)) if hasattr(processed, 'x') and len(processed.x) else None
@@ -633,7 +636,9 @@ def classify(request):
                 _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
 
                 # Store DASH embedding in session for "Find Twins" (only when DASH and embedding present)
-                if classification.model_type == 'dash' and isinstance(classification.results.get('embedding'), list) and len(classification.results['embedding']) == 1024:
+                if (classification.model_type == 'dash'
+                        and isinstance(classification.results.get('embedding'), list)
+                        and len(classification.results['embedding']) == 1024):
                     request.session['classify_dash_embedding'] = classification.results['embedding']
                 else:
                     request.session.pop('classify_dash_embedding', None)
@@ -722,7 +727,7 @@ def classify(request):
                             c for c in replacement_form.fields['model'].choices if c[0] != 'user_uploaded'
                         ]
                     context['form'] = replacement_form
-                
+
             except AppException as e:
                 messages.error(request, f"Processing Error: {e.message}")
             except Exception as e:
@@ -734,8 +739,6 @@ def classify(request):
             )
     return render(request, 'astrodash/classify.html', context)
 
-
-from astrodash.services import get_batch_processing_service
 
 def batch_process(request):
     """
@@ -784,14 +787,14 @@ def batch_process(request):
                     }
 
                     logger.info(
-                        "Batch UI parameters: smoothing=%s, minWave=%s, maxWave=%s, knownZ=%s, zValue=%s, calculateRlap=%s, modelType=%s",
-                        params['smoothing'],
-                        params['minWave'],
-                        params['maxWave'],
-                        params['knownZ'],
-                        params['zValue'],
-                        params['calculateRlap'],
-                        params['modelType'],
+                        "Batch UI parameters: "
+                        f'''smoothing={params['smoothing']} '''
+                        f'''minWave={params['minWave']} '''
+                        f'''maxWave={params['maxWave']} '''
+                        f'''knownZ={params['knownZ']} '''
+                        f'''zValue={params['zValue']} '''
+                        f'''calculateRlap={params['calculateRlap']} '''
+                        f'''modelType={params['modelType']} '''
                     )
 
                     batch_service = get_batch_processing_service()
@@ -836,6 +839,7 @@ def batch_process(request):
 
     return render(request, 'astrodash/batch.html', context)
 
+
 def _format_batch_results(results, params):
     """
     Format batch results for display in the template.
@@ -843,7 +847,7 @@ def _format_batch_results(results, params):
     formatted = {}
     for filename, result in results.items():
         formatted_item = {}
-        
+
         # Check for error
         if result.get('error'):
             formatted_item['error'] = result['error']
@@ -851,23 +855,23 @@ def _format_batch_results(results, params):
             # Extract classification data
             classification = result.get('classification', {})
             best_match = classification.get('best_match', {})
-            
+
             formatted_item['type'] = best_match.get('type', '-')
             formatted_item['age'] = best_match.get('age', '-')
-            
+
             prob = best_match.get('probability')
             formatted_item['probability'] = f"{prob:.4f}" if prob is not None else '-'
-            
+
             formatted_item['redshift'] = best_match.get('redshift', '-')
-            
+
             # RLAP only for Dash model and if requested
             if params.get('modelType') == 'dash' and params.get('calculateRlap'):
                 formatted_item['rlap'] = best_match.get('rlap', '-')
             else:
-                 formatted_item['rlap'] = '-'
-                 
+                formatted_item['rlap'] = '-'
+
         formatted[filename] = formatted_item
-        
+
     return formatted
 
 
@@ -1020,12 +1024,13 @@ def _create_bokeh_plot(spectrum, element_lines=None, template_spectra=None, wave
 
     return components(p)
 
+
 def _format_results(results):
     """
     Format results for display in the template to avoid filter issues.
     """
     formatted_matches = []
-    
+
     # helper to get attributes from dict or object
     def get_attr(obj, attr, default=None):
         if isinstance(obj, dict):
@@ -1034,21 +1039,21 @@ def _format_results(results):
 
     # Check if results has best_matches
     best_matches = get_attr(results, 'best_matches', [])
-    
+
     for match in best_matches:
         # Create a dict representation
         match_dict = {}
-        
+
         # Extract fields needed for template
         for field in ['type', 'age', 'probability', 'redshift', 'reliable']:
             match_dict[field] = get_attr(match, field)
-            
+
         # Add formatted probability
         if match_dict['probability'] is not None:
-             match_dict['formatted_probability'] = f"{match_dict['probability']:.4f}"
+            match_dict['formatted_probability'] = f"{match_dict['probability']:.4f}"
         else:
-             match_dict['formatted_probability'] = ""
+            match_dict['formatted_probability'] = ""
 
         formatted_matches.append(match_dict)
-        
+
     return {'best_matches': formatted_matches}

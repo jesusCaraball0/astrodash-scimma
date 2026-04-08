@@ -1,5 +1,4 @@
 from django.urls import path
-from astrodash import views
 from astrodash import ui_views
 
 app_name = "astrodash"
