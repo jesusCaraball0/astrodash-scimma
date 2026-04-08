@@ -6,13 +6,13 @@
       "members": [
         {
           "name": "Daniel Muthukrishna",
-          "description": "",
+          "description": "Faculty researcher",
           "image": "daniel_muthukrishna.jpg",
           "order": 0
         },
         {
           "name": "Jesus Caraballo",
-          "description": "",
+          "description": "Undergraduate student",
           "image": "jesus_caraballo.png",
           "order": 1
         }
@@ -24,25 +24,25 @@
       "members": [
         {
           "name": "Gautham Narayan",
-          "description": "",
+          "description": "Faculty researcher",
           "image": "gautham_narayan.jpg",
           "order": 0
         },
         {
           "name": "Henna Abunemeh",
-          "description": "",
+          "description": "Graduate student",
           "image": "henna_abunemeh.jpg",
           "order": 1
         },
         {
           "name": "Scott Koranda",
-          "description": "",
+          "description": "Research software engineer",
           "image": "scott_koranda.jpg",
           "order": 2
         },
         {
           "name": "Andrew Manning",
-          "description": "",
+          "description": "Research software engineer",
           "image": "andrew_manning.jpeg",
           "order": 3
         }
@@ -54,19 +54,19 @@
       "members": [
         {
           "name": "Lanqing Jia",
-          "description": "",
+          "description": "Graduate student",
           "image": "lanqing_jia.png",
           "order": 1
         },
         {
           "name": "Ruiyao Xu",
-          "description": "",
+          "description": "Graduate student",
           "image": "ruiyao_xu.jpg",
           "order": 2
         },
         {
           "name": "Noelle Samia",
-          "description": "",
+          "description": "Faculty researcher",
           "image": "noelle_samia.jpg",
           "order": 0
         }
