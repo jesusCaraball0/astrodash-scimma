@@ -110,16 +110,10 @@ def team_members(request):
     """
     if TEAM_MEMBERS_JSON.is_file():
         affiliations = _team_affiliations_from_json()
-        source = "file"
-    else:
-        from astrodash.models import TeamAffiliation
-
-        affiliations = TeamAffiliation.objects.prefetch_related("members").all()
-        source = "database"
     return render(
         request,
         "astrodash/team_members.html",
-        {"affiliations": affiliations, "team_source": source},
+        {"affiliations": affiliations},
     )
 
 

@@ -78,18 +78,9 @@
 <main class="team-page py-4 px-2 px-md-3 bg-white">
   <header class="mb-4 pb-2 border-bottom border-light">
     <h1 class="page-title mb-2">AstroDASH Team</h1>
-    <p class="page-lead mb-0">This project is a collaborative effort across various institutions. Listed is our team by affiliations. </p>
+    <p class="page-lead mb-0">This project is a collaborative effort across various institutions. Our team is grouped here by affiliation. </p>
   </header>
 
-  {% if not affiliations %}
-  <p class="text-muted">
-    {% if team_source == "file" %}
-    No team affiliations are defined in <code>astrodash/data/team_members.json</code>. Add an <code>affiliations</code> array there, then redeploy.
-    {% else %}
-    No team affiliations have been added yet. Either add <code>astrodash/data/team_members.json</code> in the repo, or use the <a href="{% url 'admin:index' %}">admin</a>.
-    {% endif %}
-  </p>
-  {% else %}
   <div class="row">
     {% for affiliation in affiliations %}
     <section class="col-lg-4 col-md-6 mb-5 d-flex flex-column" aria-labelledby="team-inst-{{ forloop.counter }}">
@@ -122,6 +113,5 @@
     </section>
     {% endfor %}
   </div>
-  {% endif %}
 </main>
 {% endblock %}
