@@ -273,9 +273,6 @@ KUBECONFIG=/path/to/kubeconfig.<env> \
 A new PVC will be provisioned automatically and all files will be downloaded
 fresh.
 
-**Note:** The celery worker and celery beat pods also mount the data PVC. They
-will restart automatically when the PVC is recreated.
-
 ## Troubleshooting
 
 ### Check init container logs

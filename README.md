@@ -27,8 +27,8 @@ AstroDash follows a layered architecture:
   and model management
 - **ML infrastructure** — PyTorch-based classifiers, preprocessing, and
   template handling
-- **Async processing** — Celery workers with Redis for batch classification
-  tasks
+- **Batch processing** — synchronous batch classification handled in the
+  request thread; an async architecture is a future roadmap item
 
 The application is containerized with Docker and deployed to Kubernetes on
 Jetstream2 using ArgoCD for GitOps.
