@@ -53,34 +53,6 @@ services:
       - ../env/.env.default
       - ../env/.env.dev
 
-  celery-worker:
-    extends:
-      file: docker-compose.yml
-      service: celery-worker
-    build:
-      context: ../app/
-    env_file:
-      - ../env/.env.default
-      - ../env/.env.dev
-    volumes:
-      - django-static:/app/static
-      - ../app:/app
-      - astrodash-data:/mnt/astrodash-data
-
-  celery-beat:
-    extends:
-      file: docker-compose.yml
-      service: celery-beat
-    build:
-      context: ../app/
-    env_file:
-      - ../env/.env.default
-      - ../env/.env.dev
-    volumes:
-      - django-static:/app/static
-      - ../app:/app
-      - astrodash-data:/mnt/astrodash-data
-
   redis:
     extends:
       file: docker-compose.yml
@@ -88,17 +60,3 @@ services:
     env_file:
       - ../env/.env.default
       - ../env/.env.dev
-
-  flower:
-    extends:
-      file: docker-compose.yml
-      service: flower
-    build:
-      context: ../app/
-    env_file:
-      - ../env/.env.default
-      - ../env/.env.dev
-    volumes:
-      - django-static:/app/static
-      - ../app:/app
-      - astrodash-data:/mnt/astrodash-data

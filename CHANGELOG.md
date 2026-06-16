@@ -50,6 +50,9 @@ Types of changes:
   by audience (`docs/api/`, `docs/guides/`, `docs/developer/`, `docs/admin/`,
   `docs/acknowledgements/`).
 - Data manifest updated for Python 3.11 compatibility.
+- Django upgraded from 5.1.14 to 5.2 LTS and Python interpreter upgraded
+  from 3.11 to 3.13. Django 5.2 LTS is supported through April 2028;
+  Python 3.13 remains in bugfix support through October 2026.
 
 ### Removed
 
@@ -57,6 +60,18 @@ Types of changes:
   requirements.txt, docker-compose.docs.yaml).
 - Read the Docs configuration (`.readthedocs.yml`).
 - Pre-commit hooks disabled pending review (`.pre-commit-config.yaml`).
+- Inert Celery infrastructure — the `celery`, `flower`,
+  `django-celery-beat`, `django-celery-results`, and `watchdog`
+  dependencies; the `celery-worker`, `celery-beat`, and `flower`
+  Docker Compose services; the `CELERY_*` settings block and
+  Celery-related `INSTALLED_APPS` entries; the
+  `docker-entrypoint.celery.sh`, `docker-entrypoint.celery_beat.sh`,
+  and `docker-entrypoint.flower.sh` entrypoint scripts; and the
+  Celery-only environment variables (`CELERY_*`,
+  `MESSAGE_BROKER_*`, `FLOWER_*`, `DISABLE_CELERY_BEAT`). The
+  paired Kubernetes Deployments are removed in the
+  `astrodash-k8s-gitops` repository. Redis remains in service as
+  the Django cache backend.
 
 ### Fixed
 

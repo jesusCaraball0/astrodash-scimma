@@ -25,5 +25,5 @@ run/astrodash.test.sh slim_dev
 
 | Profile | Command | Description |
 |---------|---------|-------------|
-| `full_dev` | `run/astrodashctl full_dev up` | All services including Celery workers |
-| `slim_dev` | `run/astrodashctl slim_dev up` | Web app + database only (no Celery) |
+| `full_dev` | `run/astrodashctl full_dev up` | Web app, database, Redis cache, and nginx |
+| `slim_dev` | `run/astrodashctl slim_dev up` | Web app and database only (no Redis cache) |
