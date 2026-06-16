@@ -9,9 +9,11 @@ user-uploaded spectrum).
 
 import json
 import pickle
+import warnings
 from pathlib import Path
 
 import numpy as np
+from sklearn.exceptions import InconsistentVersionWarning
 
 from astrodash.config.logging import get_logger
 
@@ -52,8 +54,17 @@ class TwinsSearchService:
         self._embeddings = np.load(emb_path).astype(np.float32)
         with open(umap_path, "rb") as f:
             self._umap = pickle.load(f)
-        with open(pca_path, "rb") as f:
-            self._pca = pickle.load(f)
+        # The pickled PCA was serialized by an older sklearn (currently 1.8.0
+        # vs the runtime 1.9.0+), which surfaces an InconsistentVersionWarning
+        # on every load. PCA pickles tend to survive minor sklearn bumps
+        # cleanly — and this one does, find_twins returns sensible PCA coords
+        # — so the warning is informational noise. Silence it only at this
+        # specific load site so other (legitimately different) version
+        # mismatches elsewhere still surface.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InconsistentVersionWarning)
+            with open(pca_path, "rb") as f:
+                self._pca = pickle.load(f)
         with open(payload_path, "r") as f:
             payload = json.load(f)
         # Only the 2D coordinate arrays are needed at query time — the rest of the
