@@ -150,4 +150,3 @@ quiverMaps/
 # Astrodash local
 app/astrodash/explorer/dash_twinsfromspace.html
 astrodash-logs/
-app/astrodash/tests/
