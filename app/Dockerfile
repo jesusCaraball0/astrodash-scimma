@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS deps
+FROM python:3.13-slim AS deps
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir torch==2.9.0+cpu --index-url https://download.pyt
 COPY ./requirements.txt /requirements.txt
 RUN pip install -r /requirements.txt --no-cache-dir
 
-FROM python:3.11-slim
+FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -24,7 +24,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=deps /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
+COPY --from=deps /usr/local/lib/python3.13/site-packages/ /usr/local/lib/python3.13/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
 
 RUN mkdir /app
