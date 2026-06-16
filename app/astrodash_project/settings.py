@@ -60,13 +60,11 @@ INSTALLED_APPS = [
     "django_tables2",
     "bootstrap4",
     "crispy_bootstrap4",
-    "django_celery_beat",
     "rest_framework",
     "astrodash",
     "corsheaders",
     "users",
     "django_filters",
-    'django_celery_results',
     'mozilla_django_oidc',
     "silk",  # Django Silk profiler (https://github.com/jazzband/django-silk)
 ]
@@ -167,11 +165,6 @@ STATIC_ROOT = os.path.join(os.path.dirname(BASE_DIR), "app/static/")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
-CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
-CELERY_TIMEZONE = "UTC"
-
-CELERY_IMPORTS = []
-
 REDIS_SERVICE = os.environ.get('REDIS_SERVICE', 'redis')
 REDIS_PORT = int(os.environ.get('REDIS_PORT', '6379'))
 # If running Redis in high-availability mode using Sentinel, there must be a master group name set
@@ -184,19 +177,7 @@ CACHES = {
         "LOCATION": f"{REDIS_OR_SENTINEL}://{REDIS_SERVICE}:{REDIS_PORT}",
     }
 }
-# Backends & brokers: https://docs.celeryq.dev/en/stable/getting-started/backends-and-brokers/index.html
-CELERY_BROKER_URL = f"{REDIS_OR_SENTINEL}://{REDIS_SERVICE}:{REDIS_PORT}"
-CELERY_BROKER_TRANSPORT_OPTIONS = {'master_name': REDIS_MASTER_GROUP_NAME}
-# Results backend: https://docs.celeryq.dev/en/stable/userguide/configuration.html#conf-redis-result-backend
-CELERY_RESULT_BACKEND = f"{REDIS_OR_SENTINEL}://{REDIS_SERVICE}:{REDIS_PORT}"
-CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {
-    'master_name': REDIS_MASTER_GROUP_NAME,
-    'retry_policy': {
-        'timeout': 5.0
-    }
-}
 
-CELERYD_REDIRECT_STDOUTS_LEVEL = "INFO"
 CRISPY_TEMPLATE_PACK = "bootstrap4"
 
 REST_FRAMEWORK = {
