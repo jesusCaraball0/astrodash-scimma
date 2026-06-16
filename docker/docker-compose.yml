@@ -65,40 +65,6 @@ services:
       - "slim_dev"
       - "ci"
 
-  celery-worker:
-    image: ${ASTRODASH_IMAGE:-astrodash:latest}
-    command: bash entrypoints/docker-entrypoint.celery.sh
-    networks:
-      - internal
-    deploy:
-      mode: replicated
-      replicas: 2
-      resources:
-        reservations:
-          cpus: '0.25'
-          memory: 1G
-        limits:
-          cpus: "${CELERY_WORKER_LIMIT_CPUS:-4.0}"
-          memory: ${CELERY_WORKER_LIMIT_MEMORY:-4G}
-    volumes:
-      - django-static:/app/static
-      - astrodash-data:/mnt/astrodash-data
-    profiles:
-      - "full_prod"
-      - "full_dev"
-
-  celery-beat:
-    image: ${ASTRODASH_IMAGE:-astrodash:latest}
-    command: bash entrypoints/docker-entrypoint.celery_beat.sh
-    networks:
-      - internal
-    volumes:
-      - django-static:/app/static
-      - astrodash-data:/mnt/astrodash-data
-    profiles:
-      - "full_prod"
-      - "full_dev"
-
   redis:
     image: redis:alpine
     restart: always
@@ -110,14 +76,3 @@ services:
       - "full_prod"
       - "full_dev"
       - "ci"
-
-  flower:
-    image: ${ASTRODASH_IMAGE:-astrodash:latest}
-    command: bash entrypoints/docker-entrypoint.flower.sh
-    networks:
-      - internal
-    ports:
-      - 127.0.0.1:8888:${FLOWER_PORT}
-    profiles:
-      - "full_prod"
-      - "full_dev"
