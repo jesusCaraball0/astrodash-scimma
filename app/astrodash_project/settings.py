@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 
-def _resolve_app_version() -> str:
+def resolve_app_version() -> str:
     """Resolve ``APP_VERSION`` from the environment.
 
     The Helm chart sets ``APP_VERSION`` from ``.Values.image.tag`` so the
@@ -23,6 +23,9 @@ def _resolve_app_version() -> str:
     fall back too, so a chart that silently fails to template the value
     cannot impersonate a real release.
 
+    Exposed publicly (no leading underscore) because the test suite imports
+    this function directly to exercise the edge cases above.
+
     Returns:
         The value of ``APP_VERSION`` from the environment, or the literal
         string ``local`` when unset or empty.
@@ -30,7 +33,7 @@ def _resolve_app_version() -> str:
     return os.environ.get("APP_VERSION") or "local"
 
 
-APP_VERSION = _resolve_app_version()
+APP_VERSION = resolve_app_version()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
