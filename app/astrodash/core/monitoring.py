@@ -4,6 +4,7 @@ from datetime import datetime
 from collections import defaultdict
 import psutil
 import os
+from django.conf import settings
 from astrodash.config.logging import get_logger
 
 logger = get_logger(__name__)
@@ -72,7 +73,7 @@ def get_health_status() -> Dict[str, Any]:
         health_status = {
             "status": "healthy",
             "timestamp": datetime.utcnow().isoformat(),
-            "version": "1.0.0"
+            "version": settings.APP_VERSION,
         }
 
         # Check disk space

@@ -12,7 +12,28 @@ https://docs.djangoproject.com/en/3.2/ref/settings/
 import os
 from pathlib import Path
 
-APP_VERSION = '1.0.0'
+
+def resolve_app_version() -> str:
+    """Resolve ``APP_VERSION`` from the environment.
+
+    The Helm chart sets ``APP_VERSION`` from ``.Values.image.tag`` so the
+    footer, ``/healthz`` payload, and any future version surface track the
+    deployed image. The ``or`` form — rather than ``os.environ.get``'s
+    second positional default — makes an empty string ``APP_VERSION=``
+    fall back too, so a chart that silently fails to template the value
+    cannot impersonate a real release.
+
+    Exposed publicly (no leading underscore) because the test suite imports
+    this function directly to exercise the edge cases above.
+
+    Returns:
+        The value of ``APP_VERSION`` from the environment, or the literal
+        string ``local`` when unset or empty.
+    """
+    return os.environ.get("APP_VERSION") or "local"
+
+
+APP_VERSION = resolve_app_version()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
