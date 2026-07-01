@@ -66,6 +66,17 @@ if [[ "${COMPOSE_FILE}x" != "x" ]]; then
   COMPOSE_FILES="${COMPOSE_FILES} --file docker/${COMPOSE_FILE}"
 fi
 
+# For dev profiles, derive APP_VERSION from git describe so the footer,
+# /healthz, and startup log show what's actually loaded. `${APP_VERSION:-...}`
+# preserves a pre-set value; the inner fallback catches every git-side failure
+# (git binary missing, `.git` missing, no reachable commit).
+case "$PROFILE" in
+  "full_dev" | "slim_dev")
+    APP_VERSION="${APP_VERSION:-$(git describe --tags --always 2>/dev/null || echo local)}"
+    export APP_VERSION
+    ;;
+esac
+
 case "$ACTION" in
   "up")
     set -x
