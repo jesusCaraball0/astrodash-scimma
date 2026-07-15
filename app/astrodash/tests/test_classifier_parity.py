@@ -27,7 +27,15 @@ from astrodash.domain.services.redshift_service import RedshiftService
 class SelectModelPageParityTests(TestCase):
     """AE1: the select-model page offers exactly the two built-in cards."""
 
-    def test_only_dash_and_transformer_cards_are_selectable(self):
+    def _render_visible(self):
+        """Render the select-model page and return its body with comments stripped.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed. The
+            user-model/upload cards live inside comments ("functionality
+            preserved, visuals disabled"), so they appear in the raw body but
+            are not selectable; parity is about the *visible* cards.
+        """
         # Mock the model service so the page's async list_models() call does no
         # real DB/filesystem work: it keeps the test hermetic (independent of
         # any uploaded user models) and avoids leaving a connection open in
@@ -39,10 +47,10 @@ class SelectModelPageParityTests(TestCase):
                 reverse("astrodash:model_selection") + "?action=classify"
             )
         self.assertEqual(resp.status_code, 200)
-        # Strip HTML comments: the user-model/upload cards live inside comments
-        # ("functionality preserved, visuals disabled"), so they appear in the
-        # raw body but are not selectable. Parity is about the *visible* cards.
-        visible = re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    def test_only_dash_and_transformer_cards_are_selectable(self):
+        visible = self._render_visible()
         # A *selectable card* is an element with an onclick="selectModel('...')"
         # attribute. (The bare selectModel('upload') call in the page's own
         # JavaScript is not a card, so match the attribute form specifically.)
@@ -50,6 +58,35 @@ class SelectModelPageParityTests(TestCase):
         self.assertIn("onclick=\"selectModel('dash')\"", visible)
         self.assertNotIn("onclick=\"selectModel('user_model')\"", visible)
         self.assertNotIn("onclick=\"selectModel('upload')\"", visible)
+
+    def test_cards_render_titles_descriptions_tags_badge_icon_and_order(self):
+        visible = self._render_visible()
+        # Titles and descriptions, unchanged from the hand-written cards.
+        self.assertIn("Transformer Model", visible)
+        self.assertIn("Dash Model", visible)
+        self.assertIn(
+            "Advanced transformer-based model with 5-class classification", visible
+        )
+        self.assertIn("CNN-based model from the original DASH paper", visible)
+        # Feature tags for both models.
+        for tag in ("Transformer", "5 Classes", "Fast Inference"):
+            self.assertIn(f">{tag}</span>", visible)
+        for tag in ("CNN", "Template Matching", "RLap Scores"):
+            self.assertIn(f">{tag}</span>", visible)
+        # DASH's RECOMMENDED badge and flask icon, and only DASH's.
+        self.assertEqual(visible.count("RECOMMENDED"), 1)
+        self.assertIn("bi-flask", visible)
+        # Order: Transformer card precedes DASH card, as today.
+        self.assertLess(
+            visible.index("onclick=\"selectModel('transformer')\""),
+            visible.index("onclick=\"selectModel('dash')\""),
+        )
+
+    def test_no_per_model_data_model_type_css_rule_remains(self):
+        visible = self._render_visible()
+        # The selected-state color is applied inline from data-color; no static
+        # CSS rule keyed by data-model-type should remain.
+        self.assertNotIn(".model-card.selected[data-model-type", visible)
 
 
 class ClassifyFormRedshiftParityTests(TestCase):

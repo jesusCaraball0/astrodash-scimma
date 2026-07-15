@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
+from astrodash.infrastructure.ml.model_registry import active_definitions
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -180,6 +181,9 @@ def model_selection(request):
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
+    # Active model definitions drive the selection cards (title, description,
+    # color, feature tags, icon, recommended badge, and order).
+    model_definitions = active_definitions()
     form = ModelSelectionForm(request.POST or None, request.FILES or None)
 
     # Populate existing user model options (must be done before is_valid() on POST too)
@@ -225,6 +229,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -293,6 +298,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': False,
@@ -307,6 +313,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -320,6 +327,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -335,6 +343,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -364,6 +373,7 @@ def model_selection(request):
     form.fields['action_type'].initial = action_type
     context = {
         'form': form,
+        'model_definitions': model_definitions,
         'action_type': action_type,
         'existing_models_count': len(existing_models),
         'show_upload_section': show_upload_section,
