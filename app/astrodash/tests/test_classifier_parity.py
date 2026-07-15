@@ -12,6 +12,7 @@ classification services mocked, so no weights or network access are needed.
 """
 
 import re
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
@@ -22,6 +23,9 @@ from django.urls import reverse
 from astrodash.forms import ClassifyForm
 from astrodash.ui_views import _format_batch_results
 from astrodash.domain.services.redshift_service import RedshiftService
+from astrodash.domain.services.spectrum_processing_service import (
+    SpectrumProcessingService,
+)
 
 
 class SelectModelPageParityTests(TestCase):
@@ -168,6 +172,103 @@ class RedshiftEstimationGateParityTests(TestCase):
         )
         self.assertIsNone(out["estimated_redshift"])
         self.assertIn("only available for DASH", out["message"])
+
+    def test_dash_passes_the_gate(self):
+        # DASH supports redshift estimation, so it is not short-circuited by the
+        # capability gate: it proceeds past it and here fails downstream on the
+        # patched template loader. The returned message is that downstream
+        # failure, not the non-DASH gate message -- proving DASH cleared the gate.
+        svc = RedshiftService()
+        with patch(
+            "astrodash.domain.services.redshift_service.prepare_log_wavelength_and_templates",
+            side_effect=RuntimeError("reached template loading"),
+        ):
+            out = async_to_sync(svc.estimate_redshift_from_spectrum)(
+                [4000.0, 5000.0, 6000.0],
+                [1.0, 1.0, 1.0],
+                "Ia",
+                "2 to 6",
+                model_type="dash",
+            )
+        self.assertNotIn("only available for DASH", out["message"])
+        self.assertIn("reached template loading", out["message"])
+
+
+class PreprocessingVariantParityTests(TestCase):
+    """prepare_for_model selects the processor from the model's preprocessing field."""
+
+    def _service(self):
+        svc = SpectrumProcessingService()
+        # Replace the real processors with mocks so branch selection is
+        # characterized without running any spectral preprocessing.
+        svc.dash_processor = MagicMock(
+            process=MagicMock(return_value=([1.0, 2.0], 0, 2, 0.11))
+        )
+        svc.transformer_processor = MagicMock(
+            process=MagicMock(return_value=([3.0], [4.0], 0.22))
+        )
+        return svc
+
+    def _spectrum(self):
+        return SimpleNamespace(x=[4000.0, 5000.0], y=[1.0, 2.0], redshift=0.05)
+
+    def test_dash_uses_dash_processor(self):
+        svc = self._service()
+        out = svc.prepare_for_model(self._spectrum(), "dash")
+        svc.dash_processor.process.assert_called_once()
+        svc.transformer_processor.process.assert_not_called()
+        # DASH result shape carries the processor's min/max indices.
+        self.assertIn("min_idx", out)
+        self.assertIn("max_idx", out)
+        self.assertEqual(out["redshift"], 0.11)
+
+    def test_transformer_uses_transformer_processor(self):
+        svc = self._service()
+        out = svc.prepare_for_model(self._spectrum(), "transformer")
+        svc.transformer_processor.process.assert_called_once()
+        svc.dash_processor.process.assert_not_called()
+        # Transformer result shape has no min/max indices.
+        self.assertNotIn("min_idx", out)
+        self.assertEqual(out["redshift"], 0.22)
+
+    def test_user_model_passes_through_untouched(self):
+        svc = self._service()
+        out = svc.prepare_for_model(self._spectrum(), "user_uploaded")
+        svc.dash_processor.process.assert_not_called()
+        svc.transformer_processor.process.assert_not_called()
+        # No definition -> pass-through: input redshift is returned unchanged.
+        self.assertEqual(out["redshift"], 0.05)
+
+
+class BatchRedshiftGateParityTests(TestCase):
+    """The batch view requires a redshift only for models whose definition does."""
+
+    def _post_batch(self, model_type):
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        session.save()
+        return self.client.post(
+            reverse("astrodash:batch_process_ui"),
+            data={"smoothing": 0, "min_wave": 3500, "max_wave": 10000},
+        )
+
+    def test_transformer_batch_requires_redshift(self):
+        resp = self._post_batch("transformer")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("redshift", resp.context["form"].errors)
+        self.assertTrue(
+            any(
+                "Redshift is required for Transformer" in e
+                for e in resp.context["form"].errors["redshift"]
+            )
+        )
+
+    def test_dash_batch_does_not_require_redshift(self):
+        resp = self._post_batch("dash")
+        self.assertEqual(resp.status_code, 200)
+        # DASH does not require a redshift, so the gate adds no redshift error
+        # (the request instead falls through to the "no files uploaded" path).
+        self.assertNotIn("redshift", resp.context["form"].errors)
 
 
 class ClassifyViewGateParityTests(TestCase):

@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, Tuple
 from astrodash.domain.models.spectrum import Spectrum
 from astrodash.infrastructure.ml.data_processor import DashSpectrumProcessor, TransformerSpectrumProcessor
+from astrodash.infrastructure.ml.model_registry import get_definition
 from astrodash.shared.utils.helpers import interpolate_to_1024, normalise_spectrum
 from astrodash.config.settings import Settings, get_settings
 from astrodash.config.logging import get_logger
@@ -200,7 +201,14 @@ class SpectrumProcessingService:
             y = np.array(spectrum.y)
             z = getattr(spectrum, 'redshift', 0.0) or 0.0
 
-            if model_type == 'dash':
+            # The preprocessing variant comes from the model's definition; a
+            # user-uploaded model has no definition and falls through to the
+            # pass-through branch. (The variant identifier selects a processor;
+            # it is not a model-defining literal -- see the registry KTDs.)
+            definition = get_definition(model_type)
+            preprocessing = definition.preprocessing if definition is not None else None
+
+            if preprocessing == 'dash':
                 # Use DASH processor
                 processed_y, min_idx, max_idx, processed_z = self.dash_processor.process(
                     wave=x,
@@ -218,7 +226,7 @@ class SpectrumProcessingService:
                     'max_idx': max_idx
                 }
 
-            elif model_type == 'transformer':
+            elif preprocessing == 'transformer':
                 # Use Transformer processor
                 processed_x, processed_y, processed_z = self.transformer_processor.process(x, y, z)
                 return {

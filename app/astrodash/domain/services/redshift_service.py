@@ -5,6 +5,7 @@ from astrodash.shared.utils.redshift import get_median_redshift
 from astrodash.shared.utils.helpers import prepare_log_wavelength_and_templates, get_nonzero_minmax, normalize_age_bin
 from astrodash.config.settings import get_settings
 from astrodash.config.logging import get_logger
+from astrodash.infrastructure.ml.model_registry import get_definition
 
 logger = get_logger(__name__)
 
@@ -40,8 +41,10 @@ class RedshiftService:
             Dictionary with estimated redshift and error
         """
         try:
-            # Validate that only DASH models are supported
-            if model_type.lower() != "dash":
+            # Redshift estimation is offered only for models whose definition
+            # supports it (DASH today). A user-uploaded model has no definition.
+            definition = get_definition(model_type)
+            if definition is None or not definition.supports_redshift_estimation:
                 return {
                     "estimated_redshift": None,
                     "estimated_redshift_error": None,

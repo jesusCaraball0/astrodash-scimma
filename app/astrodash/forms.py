@@ -3,7 +3,11 @@ from django.core.validators import FileExtensionValidator
 import json
 import ast
 
-from astrodash.infrastructure.ml.model_registry import active_definitions, default_definition
+from astrodash.infrastructure.ml.model_registry import (
+    active_definitions,
+    default_definition,
+    get_definition,
+)
 
 
 def _builtin_model_choices():
@@ -97,8 +101,10 @@ class ClassifyForm(forms.Form):
         if known_z and redshift is None:
             self.add_error('redshift', "Redshift is required when 'Known Redshift' is checked.")
 
-        # Only require redshift for built-in Transformer; user-uploaded models use 0.0 if missing
-        if model == 'transformer' and redshift is None:
+        # Require redshift only for models whose definition demands it (built-in
+        # Transformer today); user-uploaded models use 0.0 if missing.
+        definition = get_definition(model)
+        if definition is not None and definition.requires_redshift and redshift is None:
             self.add_error('redshift', "Redshift is required for Transformer model.")
 
         return cleaned_data
