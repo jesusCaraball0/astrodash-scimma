@@ -3,6 +3,27 @@ from django.core.validators import FileExtensionValidator
 import json
 import ast
 
+from astrodash.infrastructure.ml.model_registry import active_definitions, default_definition
+
+
+def _builtin_model_choices():
+    """Return (id, title) choices for the active built-in models, in registry order."""
+    return [(d.id, d.title) for d in active_definitions()]
+
+
+def _classify_model_choices():
+    """Built-in model choices plus the user_uploaded entry used by the classify form."""
+    return _builtin_model_choices() + [('user_uploaded', 'User uploaded model')]
+
+
+def _selection_model_choices():
+    """Built-in model choices plus the user_model/upload entries for the selection page."""
+    return _builtin_model_choices() + [
+        ('user_model', 'Use Uploaded Model'),
+        ('upload', 'Upload Your Model'),
+    ]
+
+
 class ClassifyForm(forms.Form):
     supernova_name = forms.CharField(
         label="Supernova Name",
@@ -18,15 +39,12 @@ class ClassifyForm(forms.Form):
         help_text="Upload a spectrum file (text format, two columns: wavelength and flux)"
     )
     
-    # Analysis Options (user_uploaded used when session has a selected user model; not shown in dropdown)
-    MODEL_CHOICES = [
-        ('dash', 'Dash Model'),
-        ('transformer', 'Transformer Model'),
-        ('user_uploaded', 'User uploaded model'),
-    ]
+    # Analysis Options. Built-in choices derive from the model registry; the
+    # user_uploaded entry is appended (used when the session has a selected user
+    # model; not shown in the dropdown). Choices and default are set in __init__
+    # so they always reflect the live registry.
     model = forms.ChoiceField(
-        choices=MODEL_CHOICES,
-        initial='transformer',
+        choices=[],
         widget=forms.Select(attrs={'class': 'form-control'})
     )
     
@@ -60,6 +78,11 @@ class ClassifyForm(forms.Form):
         widget=forms.NumberInput(attrs={'class': 'form-control', 'step': 'any'})
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['model'].choices = _classify_model_choices()
+        self.fields['model'].initial = default_definition().id
+
     def clean(self):
         cleaned_data = super().clean()
         file = cleaned_data.get('file')
@@ -85,13 +108,10 @@ class ModelSelectionForm(forms.Form):
     """
     Form for model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
+    # Built-in choices derive from the model registry; the user_model and upload
+    # entries are appended. Set in __init__ to reflect the live registry.
     model_type = forms.ChoiceField(
-        choices=[
-            ('transformer', 'Transformer Model'),
-            ('dash', 'Dash Model'),
-            ('user_model', 'Use Uploaded Model'),
-            ('upload', 'Upload Your Model'),
-        ],
+        choices=[],
         widget=forms.HiddenInput(),  # We'll handle selection via JavaScript/cards
         required=False
     )
@@ -142,7 +162,11 @@ class ModelSelectionForm(forms.Form):
         widget=forms.HiddenInput(),
         required=False
     )
-    
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['model_type'].choices = _selection_model_choices()
+
     def clean(self):
         cleaned_data = super().clean()
         model_type = cleaned_data.get('model_type')
