@@ -147,6 +147,9 @@ quiverMaps/
 
 .vscode/
 
+# Claude
+CLAUDE.md
+
 # Astrodash local
 app/astrodash/explorer/dash_twinsfromspace.html
 astrodash-logs/
