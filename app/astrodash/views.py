@@ -14,7 +14,9 @@ from astrodash.core.exceptions import (
     TemplateNotFoundException,
     ElementNotFoundException,
     LineListNotFoundException,
+    HTTP_400_BAD_REQUEST,
 )
+from astrodash.infrastructure.ml.model_registry import get_definition
 from astrodash.services import (
     get_template_analysis_service,
     get_line_list_service,
@@ -58,6 +60,47 @@ def _parse_params(raw: str | None) -> dict:
         return json.loads(raw)
     except json.JSONDecodeError:
         raise ValidationException("Invalid JSON supplied for params")
+
+
+def _resolve_model_type(params: dict, model_id: str | None) -> str:
+    """Resolve the effective model type for a classification request.
+
+    The model registry is the single source of truth: a client-supplied
+    ``modelType`` is accepted only when it names an active built-in definition.
+    A present ``model_id`` takes precedence and routes to the user-uploaded
+    path without consulting the registry (mirroring the factory precedence).
+
+    Args:
+        params: Parsed request params; ``modelType`` is read from here.
+        model_id: The user-uploaded model id, if any. When truthy it wins.
+
+    Returns:
+        The resolved model type: ``"user_uploaded"`` when ``model_id`` is
+        present, otherwise the active built-in id supplied as ``modelType``.
+
+    Raises:
+        AppException: With HTTP 400 when, absent a ``model_id``, ``modelType``
+            is omitted/empty, names no registry definition, or names a retired
+            (inactive) definition.
+    """
+    if model_id:
+        return "user_uploaded"
+
+    model_type = params.get("modelType")
+    if not model_type:
+        raise AppException("modelType is required.", status_code=HTTP_400_BAD_REQUEST)
+
+    definition = get_definition(model_type)
+    if definition is None:
+        raise AppException(
+            f"Unknown model type: {model_type}.", status_code=HTTP_400_BAD_REQUEST
+        )
+    if not definition.is_active:
+        raise AppException(
+            f"Model type {model_type} is not available.",
+            status_code=HTTP_400_BAD_REQUEST,
+        )
+    return model_type
 
 
 @require_GET
@@ -158,9 +201,10 @@ def process_spectrum(request):
     model_id = request.POST.get("model_id")
     uploaded_file = request.FILES.get("file")
 
-    model_type = "user_uploaded" if model_id else params.get("modelType", "dash")
-    if model_type not in ("dash", "transformer", "user_uploaded"):
-        model_type = "dash"
+    try:
+        model_type = _resolve_model_type(params, model_id)
+    except AppException as exc:
+        return _json_error(exc.message, status=exc.status_code)
 
     osc_ref = params.get("oscRef")
     if osc_ref:
@@ -400,9 +444,10 @@ def batch_process(request):
     if not zip_file and not files:
         return _json_error("No files provided", status=400)
 
-    model_type = "user_uploaded" if model_id else params.get("modelType", "dash")
-    if model_type not in ("dash", "transformer", "user_uploaded"):
-        model_type = "dash"
+    try:
+        model_type = _resolve_model_type(params, model_id)
+    except AppException as exc:
+        return _json_error(exc.message, status=exc.status_code)
 
     service = get_batch_processing_service()
     try:
