@@ -148,12 +148,19 @@ class ClassifyModelTypeContractTests(SimpleTestCase):
             classification_svc.classify_spectrum.call_args.kwargs["model_type"],
             "transformer",
         )
+        # The resolved model_type is echoed back in the response payload.
+        self.assertEqual(resp.json()["model_type"], "transformer")
 
-    def test_model_id_routes_to_user_uploaded_unchanged(self):
-        """AE5: a model_id resolves to user_uploaded regardless of modelType."""
+    def test_model_id_wins_over_modeltype_and_routes_to_user_uploaded(self):
+        """AE5: a model_id resolves to user_uploaded and takes precedence.
+
+        A valid, competing ``modelType`` is supplied alongside the ``model_id``
+        to prove ``model_id`` wins -- a regression that consulted ``modelType``
+        first would classify as transformer and fail here.
+        """
         resp, classification_svc = self._post_with_services(
             {
-                "params": "{}",
+                "params": '{"modelType": "transformer"}',
                 "model_id": "abc-123",
                 "_expected_model_type": "user_uploaded",
             }
@@ -163,6 +170,7 @@ class ClassifyModelTypeContractTests(SimpleTestCase):
         kwargs = classification_svc.classify_spectrum.call_args.kwargs
         self.assertEqual(kwargs["model_type"], "user_uploaded")
         self.assertEqual(kwargs["user_model_id"], "abc-123")
+        self.assertEqual(resp.json()["model_type"], "user_uploaded")
 
 
 class BatchModelTypeContractTests(SimpleTestCase):
@@ -173,33 +181,38 @@ class BatchModelTypeContractTests(SimpleTestCase):
         self.url = reverse("astrodash_api:batch_process")
 
     def _post(self, params, model_id=None):
-        """POST a one-file batch request with API writes enabled."""
+        """POST a one-file batch request with the batch service mocked.
+
+        The service is always mocked so the 400 tests can assert the endpoint
+        short-circuits before invoking it (the resolver rejects an invalid
+        modelType before ``get_batch_processing_service`` is reached).
+
+        Returns:
+            A ``(response, batch_svc)`` tuple; ``batch_svc.process_batch`` is an
+            ``AsyncMock`` returning a serializable result.
+        """
         upload = SimpleUploadedFile("spectrum.dat", b"3000 1.0\n5000 2.0\n")
         data = {"params": params, "files": upload}
         if model_id is not None:
             data["model_id"] = model_id
-        with patch("astrodash.views.API_WRITES_ENABLED", True):
-            return self.client.post(self.url, data=data)
-
-    def _post_with_service(self, params):
-        """POST with the batch service mocked, returning a serializable result."""
-        upload = SimpleUploadedFile("spectrum.dat", b"3000 1.0\n5000 2.0\n")
         batch_svc = MagicMock(process_batch=AsyncMock(return_value={"results": []}))
         with patch("astrodash.views.API_WRITES_ENABLED", True), patch(
             "astrodash.views.get_batch_processing_service", return_value=batch_svc
         ):
-            resp = self.client.post(self.url, data={"params": params, "files": upload})
+            resp = self.client.post(self.url, data=data)
         return resp, batch_svc
 
     def test_omitted_model_type_returns_400(self):
-        resp = self._post(params="{}")
+        resp, batch_svc = self._post(params="{}")
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["detail"], "modelType is required.")
+        batch_svc.process_batch.assert_not_called()
 
     def test_unknown_model_type_returns_400(self):
-        resp = self._post(params='{"modelType": "bogus"}')
+        resp, batch_svc = self._post(params='{"modelType": "bogus"}')
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["detail"], "Unknown model type: bogus.")
+        batch_svc.process_batch.assert_not_called()
 
     def test_retired_model_type_returns_400(self):
         transformer = model_registry.get_definition("transformer")
@@ -209,15 +222,29 @@ class BatchModelTypeContractTests(SimpleTestCase):
             replace(dash, is_default=True),
         )
         with patch.object(model_registry, "MODELS", patched):
-            resp = self._post(params='{"modelType": "transformer"}')
+            resp, batch_svc = self._post(params='{"modelType": "transformer"}')
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(
             resp.json()["detail"], "Model type transformer is not available."
         )
+        batch_svc.process_batch.assert_not_called()
 
     def test_valid_dash_reaches_batch_service(self):
-        resp, batch_svc = self._post_with_service(params='{"modelType": "dash"}')
+        resp, batch_svc = self._post(params='{"modelType": "dash"}')
         self.assertEqual(resp.status_code, 200)
         batch_svc.process_batch.assert_called_once()
         # process_batch(payload, params, model_type, model_id) -- positional.
         self.assertEqual(batch_svc.process_batch.call_args.args[2], "dash")
+
+    def test_model_id_routes_to_user_uploaded_unchanged(self):
+        """The model_id -> user_uploaded path is preserved on the batch endpoint.
+
+        Mirrors the classify AE5 parity: a present model_id makes modelType
+        optional and routes to the user-uploaded model unchanged.
+        """
+        resp, batch_svc = self._post(params="{}", model_id="abc-123")
+        self.assertEqual(resp.status_code, 200)
+        batch_svc.process_batch.assert_called_once()
+        # process_batch(payload, params, model_type, model_id) -- positional.
+        self.assertEqual(batch_svc.process_batch.call_args.args[2], "user_uploaded")
+        self.assertEqual(batch_svc.process_batch.call_args.args[3], "abc-123")
