@@ -35,6 +35,7 @@ The `params` parameter accepts a JSON string with the following fields:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `modelType` | String | \- | Classifier to use. **Required** unless `model_id` is supplied. Must be one of the active built-in model ids (currently `dash` or `transformer`); an omitted, unknown, or retired value returns `400`. The valid values track the model registry, so they change as models are added or retired. |
 | `oscRef` | String | \- | SN name on Open Supernova Catalog (e.g., "sn2002er") |
 | `smoothing` | Integer | 0 | Smoothing parameter |
 | `knownZ` | Boolean | false | Whether redshift is known |
@@ -102,7 +103,7 @@ The `params` parameter accepts a JSON string with the following fields:
 ```bash
 curl -X POST "http://localhost:8000/api/v1/process" \
   -F "file=@spectrum.fits" \
-  -F 'params={"smoothing": 6, "knownZ": true, "zValue": 0.5, "calculateRlap": true}'
+  -F 'params={"modelType": "dash", "smoothing": 6, "knownZ": true, "zValue": 0.5, "calculateRlap": true}'
 ```
 
 #### Python
@@ -112,7 +113,7 @@ import requests
 
 files = {'file': open('spectrum.fits', 'rb')}
 data = {
-    'params': '{"smoothing": 6, "knownZ": true, "zValue": 0.5}'
+    'params': '{"modelType": "dash", "smoothing": 6, "knownZ": true, "zValue": 0.5}'
 }
 
 response = requests.post('http://localhost:8000/api/v1/process',
@@ -128,6 +129,7 @@ print(f"Confidence: {result['classification']['best_matches'][0]['confidence']:.
 const formData = new FormData();
 formData.append('file', fileInput.files[0]);
 formData.append('params', JSON.stringify({
+  modelType: 'dash',
   smoothing: 6,
   knownZ: true,
   zValue: 0.5
@@ -147,7 +149,7 @@ fetch('http://localhost:8000/api/v1/process', {
 
 ```bash
 curl -X POST "http://localhost:8000/api/v1/process" \
-  -F 'params={"oscRef": "osc-sn2011fe-0", "smoothing": 4}'
+  -F 'params={"modelType": "dash", "oscRef": "osc-sn2011fe-0", "smoothing": 4}'
 ```
 
 #### Python
@@ -156,7 +158,7 @@ curl -X POST "http://localhost:8000/api/v1/process" \
 import requests
 
 data = {
-    'params': '{"oscRef": "osc-sn2011fe-0", "smoothing": 4}'
+    'params': '{"modelType": "dash", "oscRef": "osc-sn2011fe-0", "smoothing": 4}'
 }
 
 response = requests.post('http://localhost:8000/api/v1/process', data=data)
@@ -205,6 +207,24 @@ The classification includes:
 
   ```json
   { "detail": "No valid spectrum data found in file" }
+  ```
+
+- 400: `modelType` omitted without a `model_id`
+
+  ```json
+  { "detail": "modelType is required." }
+  ```
+
+- 400: unknown `modelType` (not a registry model id)
+
+  ```json
+  { "detail": "Unknown model type: bogus." }
+  ```
+
+- 400: retired `modelType` (a model no longer active in the registry)
+
+  ```json
+  { "detail": "Model type transformer is not available." }
   ```
 
 - 422: Validation error (missing or malformed `params`)

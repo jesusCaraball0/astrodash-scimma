@@ -25,7 +25,12 @@ multipart/form-data
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `zip_file` | File | Yes | ZIP file containing spectrum files (FITS, DAT, TXT, LNW) |
-| `params` | String (JSON) | No | Processing parameters as JSON string (see `/process` endpoint) |
+| `params` | String (JSON) | Yes | Processing parameters as JSON string (see `/process` endpoint). Must include `modelType` unless `model_id` is supplied. |
+
+The `params` JSON must include `modelType` (one of the active built-in model
+ids, currently `dash` or `transformer`) unless a `model_id` is supplied. An
+omitted, unknown, or retired `modelType` returns `400`, validated against the
+model registry's active definitions -- the same contract as `/process`.
 
 ## Response
 
@@ -62,7 +67,7 @@ multipart/form-data
 ```bash
 curl -X POST "http://localhost:8000/api/v1/batch-process" \
   -F "zip_file=@spectra.zip" \
-  -F 'params={"smoothing": 6}'
+  -F 'params={"modelType": "dash", "smoothing": 6}'
 ```
 
 ### Python
@@ -71,7 +76,7 @@ curl -X POST "http://localhost:8000/api/v1/batch-process" \
 import requests
 
 files = {'zip_file': open('spectra.zip', 'rb')}
-data = {'params': '{"smoothing": 6}'}
+data = {'params': '{"modelType": "dash", "smoothing": 6}'}
 response = requests.post('http://localhost:8000/api/v1/batch-process', files=files, data=data)
 print(response.json())
 ```
@@ -88,6 +93,12 @@ print(response.json())
 
   ```json
   { "detail": "Must provide either zip_file or files parameter." }
+  ```
+
+- 400: `modelType` omitted (without `model_id`), unknown, or retired
+
+  ```json
+  { "detail": "modelType is required." }
   ```
 
 - 400: Unsupported file types inside ZIP

@@ -258,13 +258,12 @@
                   },
                   "params": {
                     "type": "string",
-                    "default": "{}",
-                    "description": "JSON string with processing parameters (modelType, oscRef)"
+                    "description": "JSON string with processing parameters. Must include modelType (one of the active built-in model ids, e.g. dash or transformer) unless model_id is supplied; also accepts oscRef and other processing fields."
                   },
                   "model_id": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "User model ID (overrides modelType to user_uploaded)"
+                    "description": "User model ID. When present the request uses the user-uploaded model and modelType is not required."
                   }
                 }
               }
@@ -281,7 +280,7 @@
             }
           },
           "400": {
-            "description": "Invalid parameters or file"
+            "description": "Invalid file, or a modelType that is omitted (without model_id), unknown, or retired. modelType is validated against the model registry's active definitions."
           },
           "500": {
             "description": "Processing error"
@@ -585,13 +584,12 @@
                   },
                   "params": {
                     "type": "string",
-                    "default": "{}",
-                    "description": "JSON string with processing parameters"
+                    "description": "JSON string with processing parameters. Must include modelType (one of the active built-in model ids, e.g. dash or transformer) unless model_id is supplied."
                   },
                   "model_id": {
                     "type": "string",
                     "format": "uuid",
-                    "description": "User model ID"
+                    "description": "User model ID. When present the batch uses the user-uploaded model and modelType is not required."
                   }
                 }
               }
@@ -608,7 +606,7 @@
             }
           },
           "400": {
-            "description": "Invalid parameters, or both/neither zip_file and files provided"
+            "description": "Both/neither zip_file and files provided, or a modelType that is omitted (without model_id), unknown, or retired. modelType is validated against the model registry's active definitions."
           },
           "500": {
             "description": "Batch processing error"
