@@ -31,6 +31,21 @@ from astrodash.infrastructure.ml.model_registry.definitions.transformer import (
     TRANSFORMER,
 )
 
+# Public surface re-exported from this package. Declaring it keeps the status
+# constants (imported here purely to preserve `from ...model_registry import
+# STATUS_*` for callers) from reading as unused, so a future lint/autofix pass
+# cannot strip the re-export and break those import sites.
+__all__ = [
+    "ModelDefinition",
+    "STATUS_ACTIVE",
+    "STATUS_RETIRED",
+    "MODELS",
+    "validate_registry",
+    "get_definition",
+    "active_definitions",
+    "default_definition",
+]
+
 # Ordered registry of built-in classifiers. The order here is the order the
 # cards render on the model-selection page (Transformer first, then DASH),
 # preserving today's layout.
