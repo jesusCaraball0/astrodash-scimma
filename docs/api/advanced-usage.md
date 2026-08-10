@@ -35,7 +35,7 @@ def process_large_dataset(file_list, chunk_size=50):
             response = requests.post(
                 'http://localhost:8000/astrodash/api/v1/batch-process',
                 files={'zip_file': zip_file},
-                data={'params': '{}', 'model_id': None}
+                data={'params': '{"modelType": "dash"}', 'model_id': None}
             )
             chunk_results = response.json()
             results.update(chunk_results)
@@ -70,7 +70,7 @@ class BatchProcessor:
                 response = self.session.post(
                     'http://localhost:8000/astrodash/api/v1/batch-process',
                     files={'zip_file': zip_file},
-                    data={'params': '{}', 'model_id': None}
+                    data={'params': '{"modelType": "dash"}', 'model_id': None}
                 )
                 return response.json()
         finally:

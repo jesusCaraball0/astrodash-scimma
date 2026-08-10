@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
+from astrodash.infrastructure.ml.model_registry import active_definitions, get_definition
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -180,6 +181,9 @@ def model_selection(request):
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
+    # Active model definitions drive the selection cards (title, description,
+    # color, feature tags, icon, recommended badge, and order).
+    model_definitions = active_definitions()
     form = ModelSelectionForm(request.POST or None, request.FILES or None)
 
     # Populate existing user model options (must be done before is_valid() on POST too)
@@ -225,6 +229,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -293,6 +298,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': False,
@@ -307,6 +313,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -320,6 +327,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -335,6 +343,7 @@ def model_selection(request):
                         'astrodash/model_selection.html',
                         {
                             'form': form,
+                            'model_definitions': model_definitions,
                             'action_type': action_type,
                             'existing_models_count': len(existing_models),
                             'show_upload_section': True,
@@ -364,6 +373,7 @@ def model_selection(request):
     form.fields['action_type'].initial = action_type
     context = {
         'form': form,
+        'model_definitions': model_definitions,
         'action_type': action_type,
         'existing_models_count': len(existing_models),
         'show_upload_section': show_upload_section,
@@ -631,12 +641,20 @@ def classify(request):
                     if (classification.model_type == 'user_uploaded' and selected_model_display)
                     else classification.model_type
                 )
-                # Template overlays only available for DASH model (templates are DASH-specific)
-                show_templates_section = classification.model_type == 'dash'
+                # Capability gates come from the classified model's definition
+                # (DASH today). A user-uploaded model has no definition -> gates off.
+                classified_def = get_definition(classification.model_type)
+
+                # Template overlays only available for models that support them
+                # (templates are DASH-specific).
+                show_templates_section = bool(
+                    classified_def and classified_def.supports_template_overlays
+                )
                 _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
 
-                # Store DASH embedding in session for "Find Twins" (only when DASH and embedding present)
-                if (classification.model_type == 'dash'
+                # Store the embedding in session for "Find Twins" only when the
+                # model supports twins and the embedding is present.
+                if (classified_def is not None and classified_def.supports_twins
                         and isinstance(classification.results.get('embedding'), list)
                         and len(classification.results['embedding']) == 1024):
                     request.session['classify_dash_embedding'] = classification.results['embedding']
@@ -768,8 +786,11 @@ def batch_process(request):
         files = request.FILES.getlist('files')
 
         if form.is_valid():
-            # Transformer requires redshift when known_z is not set
-            if selected_model_type == 'transformer' and form.cleaned_data.get('redshift') is None:
+            # Models whose definition requires a redshift (Transformer today)
+            # need one when known_z is not set.
+            batch_def = get_definition(selected_model_type)
+            if (batch_def is not None and batch_def.requires_redshift
+                    and form.cleaned_data.get('redshift') is None):
                 form.add_error('redshift', "Redshift is required for Transformer model.")
             else:
                 try:
@@ -864,8 +885,10 @@ def _format_batch_results(results, params):
 
             formatted_item['redshift'] = best_match.get('redshift', '-')
 
-            # RLAP only for Dash model and if requested
-            if params.get('modelType') == 'dash' and params.get('calculateRlap'):
+            # RLAP only for models whose definition supports it (Dash today) and
+            # only if requested.
+            rlap_def = get_definition(params.get('modelType'))
+            if rlap_def is not None and rlap_def.supports_rlap and params.get('calculateRlap'):
                 formatted_item['rlap'] = best_match.get('rlap', '-')
             else:
                 formatted_item['rlap'] = '-'

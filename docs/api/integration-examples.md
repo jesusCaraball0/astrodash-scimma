@@ -26,7 +26,7 @@ def process_spectrum(file_path):
     with open(file_path, 'rb') as f:
         files = {'file': f}
         data = {
-            'params': json.dumps({'smoothing': 3}),
+            'params': json.dumps({'modelType': 'dash', 'smoothing': 3}),
             'model_id': None  # Optional: specify user model ID if using custom model
         }
         response = requests.post(
@@ -45,7 +45,7 @@ def batch_process(file_paths):
     with open('spectra.zip', 'rb') as zip_file:
         files = {'zip_file': zip_file}
         data = {
-            'params': '{}',  # Required: processing parameters as JSON string
+            'params': '{"modelType": "dash"}',  # Required: modelType (unless model_id is set) plus any processing parameters
             'model_id': None  # Optional: specify user model ID if using custom model
         }
         response = requests.post(
@@ -93,7 +93,7 @@ async function batchProcess(filePaths) {
     const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
     const form = new FormData();
     form.append('zip_file', zipBuffer, { filename: 'spectra.zip' });
-    form.append('params', '{}');  // Required: processing parameters
+    form.append('params', '{"modelType": "dash"}');  // Required: modelType (unless model_id is set) plus any processing parameters
     form.append('model_id', '');  // Optional: user model ID
 
     const response = await axios.post(

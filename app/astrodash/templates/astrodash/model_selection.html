@@ -40,63 +40,46 @@
 
                 <!-- Model Selection Cards -->
                 <div class="row mb-4 justify-content-center">
-                    <!-- Transformer Model Card -->
+                    <!-- Built-in model cards, rendered from the model registry
+                         (active_definitions()), preserving today's order. -->
+                    {% for model in model_definitions %}
                     <div class="col-lg-3 col-md-6 mb-4">
-                        <div class="card shadow-sm h-100 model-card" 
-                             data-model-type="transformer"
+                        <div class="card shadow-sm h-100 model-card"
+                             data-model-type="{{ model.id }}"
+                             data-color="{{ model.color }}"
                              style="cursor: pointer; border: 2px solid transparent; transition: all 0.3s ease;"
-                             onmouseover="this.style.borderColor='#ff8c00'; this.style.boxShadow='0 4px 8px rgba(255,140,0,0.3)'"
+                             onmouseover="this.style.borderColor='{{ model.color }}'; this.style.boxShadow='0 4px 8px {{ model.color }}4D'"
                              onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='transparent'; this.style.boxShadow=''"
-                             onclick="selectModel('transformer')">
-                            <div class="card-body">
-                                <h4 class="card-title text-center mb-3">Transformer Model</h4>
-                                <p class="card-text text-center text-muted mb-4">
-                                    Advanced transformer-based model with 5-class classification
-                                </p>
-                                
-                                <!-- Feature Tags -->
-                                <div class="d-flex justify-content-center flex-wrap gap-2">
-                                    <span class="badge" style="background-color: #ff8c00; color: white; padding: 0.5em 1em;">Transformer</span>
-                                    <span class="badge" style="background-color: #ff8c00; color: white; padding: 0.5em 1em;">5 Classes</span>
-                                    <span class="badge" style="background-color: #ff8c00; color: white; padding: 0.5em 1em;">Fast Inference</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Dash Model Card -->
-                    <div class="col-lg-3 col-md-6 mb-4">
-                        <div class="card shadow-sm h-100 model-card" 
-                             data-model-type="dash"
-                             style="cursor: pointer; border: 2px solid transparent; transition: all 0.3s ease;"
-                             onmouseover="this.style.borderColor='#28a745'; this.style.boxShadow='0 4px 8px rgba(40,167,69,0.3)'"
-                             onmouseout="if(!this.classList.contains('selected')) this.style.borderColor='transparent'; this.style.boxShadow=''"
-                             onclick="selectModel('dash')">
-                            <div class="card-body position-relative">
+                             onclick="selectModel('{{ model.id }}')">
+                            <div class="card-body{% if model.recommended %} position-relative{% endif %}">
+                                {% if model.recommended %}
                                 <!-- Recommended Badge -->
-                                <span class="badge badge-success position-absolute" style="top: 10px; right: 10px; background-color: #28a745; color: white; border: 1px solid white;">
+                                <span class="badge badge-success position-absolute" style="top: 10px; right: 10px; background-color: {{ model.color }}; color: white; border: 1px solid white;">
                                     RECOMMENDED
                                 </span>
-                                
-                                <!-- Flask Icon -->
-                                <div class="text-center mb-3" style="color: #28a745;">
-                                    <i class="bi bi-flask" style="font-size: 2rem;"></i>
+                                {% endif %}
+
+                                {% if model.icon %}
+                                <div class="text-center mb-3" style="color: {{ model.color }};">
+                                    <i class="bi {{ model.icon }}" style="font-size: 2rem;"></i>
                                 </div>
-                                
-                                <h4 class="card-title text-center mb-3">Dash Model</h4>
+                                {% endif %}
+
+                                <h4 class="card-title text-center mb-3">{{ model.title }}</h4>
                                 <p class="card-text text-center text-muted mb-4">
-                                    CNN-based model from the original DASH paper
+                                    {{ model.description }}
                                 </p>
-                                
+
                                 <!-- Feature Tags -->
                                 <div class="d-flex justify-content-center flex-wrap gap-2">
-                                    <span class="badge badge-success" style="padding: 0.5em 1em;">CNN</span>
-                                    <span class="badge badge-success" style="padding: 0.5em 1em;">Template Matching</span>
-                                    <span class="badge badge-success" style="padding: 0.5em 1em;">RLap Scores</span>
+                                    {% for tag in model.feature_tags %}
+                                    <span class="badge" style="background-color: {{ model.color }}; color: white; padding: 0.5em 1em;">{{ tag }}</span>
+                                    {% endfor %}
                                 </div>
                             </div>
                         </div>
                     </div>
+                    {% endfor %}
 
                     <!-- HIDDEN: User-uploaded and Upload model workflows (functionality preserved, visuals disabled) -->
                     <!-- Existing Uploaded Models Card
@@ -219,26 +202,8 @@
 </div>
 
 <style>
-    .model-card.selected {
-        border-color: #007bff !important;
-        box-shadow: 0 4px 12px rgba(0,123,255,0.4) !important;
-    }
-    .model-card.selected[data-model-type="transformer"] {
-        border-color: #ff8c00 !important;
-        box-shadow: 0 4px 12px rgba(255,140,0,0.4) !important;
-    }
-    .model-card.selected[data-model-type="dash"] {
-        border-color: #28a745 !important;
-        box-shadow: 0 4px 12px rgba(40,167,69,0.4) !important;
-    }
-    .model-card.selected[data-model-type="upload"] {
-        border-color: #007bff !important;
-        box-shadow: 0 4px 12px rgba(0,123,255,0.4) !important;
-    }
-    .model-card.selected[data-model-type="user_model"] {
-        border-color: #6f42c1 !important;
-        box-shadow: 0 4px 12px rgba(111,66,193,0.35) !important;
-    }
+    /* Selected-state color is applied inline by selectModel() from each card's
+       data-color, so there are no per-model (data-model-type) style rules. */
     .gap-2 > * {
         margin: 0.25rem;
     }
@@ -248,21 +213,21 @@
     let selectedModel = null;
 
     function selectModel(modelType) {
-        // Remove selected class from all cards
+        // Remove selected class and clear inline styling from all cards
         document.querySelectorAll('.model-card').forEach(card => {
             card.classList.remove('selected');
-            const borderColor = card.dataset.modelType === 'transformer' ? 'transparent' : 'transparent';
-            card.style.borderColor = borderColor;
+            card.style.borderColor = 'transparent';
+            card.style.boxShadow = '';
         });
 
-        // Add selected class to clicked card
+        // Add selected class to clicked card and apply its registry color inline
         const clickedCard = document.querySelector(`[data-model-type="${modelType}"]`);
         clickedCard.classList.add('selected');
-        
-        if (modelType === 'transformer') {
-            clickedCard.style.borderColor = '#ff8c00';
-        } else if (modelType === 'dash') {
-            clickedCard.style.borderColor = '#28a745';
+
+        const color = clickedCard.dataset.color;
+        if (color) {
+            clickedCard.style.borderColor = color;
+            clickedCard.style.boxShadow = '0 4px 12px ' + color + '66';
         }
 
         // Update hidden field

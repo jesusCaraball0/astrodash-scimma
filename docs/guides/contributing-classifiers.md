@@ -18,10 +18,12 @@ This section explains how to add a first-class model kind (e.g., like `dash` or 
 
 ### Backend Changes (Django)
 
-#### 1. Register the new model type in the model factory
+#### 1. Register the model in the model registry
 
-- File: `app/astrodash/infrastructure/ml/model_factory.py`
-- Add a branch in `ModelFactory.get_classifier(model_type, user_model_id)` to return your new classifier when `model_type == '<your_model>'`.
+- Directory: `app/astrodash/infrastructure/ml/model_registry/`
+- Create `definitions/<your_model>.py` defining a `ModelDefinition`: its `id` is the `model_type`, plus its UI card fields (title, description, color, feature tags, icon, recommended), lifecycle `status`, `is_default`, the capability/requirement flags (`requires_redshift`, `preprocessing`, `supports_twins`, `supports_redshift_estimation`, `supports_template_overlays`, `supports_rlap`), and a reference to your classifier class (see step 2). Copy `definitions/dash.py` or `definitions/transformer.py` as a template.
+- Add your definition to the ordered `MODELS` roster in `model_registry/__init__.py`.
+- You do **not** edit `model_factory.py`. `ModelFactory.get_classifier` resolves the definition through the registry (`get_definition(model_type).classifier(config)`), so registering the definition is enough for the factory to build your classifier. The forms, the model-selection cards, and the behavioral gates likewise read from the definition. Exactly one active definition may be the default; the registry's import-time invariant check enforces this.
 
 #### 2. Implement the classifier
 
@@ -38,20 +40,17 @@ This section explains how to add a first-class model kind (e.g., like `dash` or 
 - File: `app/astrodash/infrastructure/ml/data_processor.py`
 - Pattern after `DashSpectrumProcessor` or `TransformerSpectrumProcessor`. Ensure the logic mirrors training (interpolation, normalization, shaping).
 - Update: `app/astrodash/domain/services/spectrum_processing_service.py`
-  - Extend `prepare_for_model(self, spectrum, model_type)` with a new `elif model_type == '<your_model>'` branch returning exactly the tensors your classifier expects.
+  - Set your definition's `preprocessing` identifier, then extend `prepare_for_model(self, spectrum, model_type)` with a matching `elif preprocessing == '<your_variant>'` branch returning exactly the tensors your classifier expects. `prepare_for_model` reads the variant from your definition (`get_definition(model_type).preprocessing`), so it keys on that identifier rather than a raw `model_type` literal.
 
 #### 4. Template/redshift support (optional)
 
 - If your model uses templates (for RLAP or redshift estimation), add a handler under `app/astrodash/infrastructure/ml/templates/` and wire it in `app/astrodash/infrastructure/ml/templates/template_factory.py`.
-- If not supported, keep DASH-only behavior intact. Redshift estimation endpoints purposely guard on `model_type == 'dash'`.
+- If not supported, leave the capability flags off. The redshift-estimation, twins, template-overlay, and RLAP gates read the definition's `supports_*` flags (e.g. `supports_redshift_estimation`), so a model with those flags `False` is excluded automatically — there is no per-model `model_type == 'dash'` branch to update.
 
 #### 5. API validation and routing
 
-- Files to update (expand allowed values to include your type):
-  - `app/astrodash/api_views.py` (search for `model_type not in ['dash', 'transformer']`)
-  - Batch processing view (same check)
-
-- If your model requires extra inputs (e.g., mandatory redshift), add validation and clear error messages here.
+- No allowed-list to widen. The REST endpoints in `app/astrodash/views.py` (`process_spectrum` and `batch_process`) resolve `modelType` through the registry via `_resolve_model_type`: any **active** definition is accepted automatically, and an omitted, unknown, or retired `modelType` returns `400`. Registering your definition with an active `status` is all the API needs to route to it.
+- Extra-input requirements travel on the definition too. Set `requires_redshift=True` and the classify form and batch view enforce it from the flag; you do not add a bespoke validation branch.
 
 #### 6. Configuration
 
@@ -70,13 +69,11 @@ This section explains how to add a first-class model kind (e.g., like `dash` or 
 
 ### Frontend Changes (Django Templates)
 
-The AstroDash frontend uses Django templates with Bootstrap. To add your model:
+The AstroDash frontend uses Django templates with Bootstrap, and the model-selection surface is now registry-driven — you do not hand-edit the template to add a card:
 
-1. Update the model selection UI in the relevant template to include your new model type
-2. Update form validation logic that branches on `'dash'` vs `'transformer'` to also consider your type
-3. Decide whether your model requires known redshift and gate inputs accordingly
-4. Keep RLAP/template UI only for DASH unless you explicitly add template support for your model
-5. Ensure result display matches your outputs (e.g., hide RLAP if not produced)
+1. The model-selection cards render from the registry's active definitions (title, description, color, feature tags, icon, recommended badge, order), so setting your definition's UI fields adds the card. The form choice lists are generated the same way.
+2. Redshift gating follows your `requires_redshift` flag; RLAP and template-overlay UI follow `supports_rlap` and `supports_template_overlays`. Set the flags rather than adding `'dash'` vs `'transformer'` branches in the template or form.
+3. Ensure the result display matches your outputs (e.g., a model with `supports_rlap=False` produces no RLAP values to show).
 
 ### Documentation Updates
 
@@ -90,14 +87,14 @@ The AstroDash frontend uses Django templates with Bootstrap. To add your model:
 ### Checklist
 
 - Backend
-  - `ModelFactory` updated and classifier implemented
+  - Registry definition added (`definitions/<id>.py` + `MODELS` entry) and classifier implemented
   - Preprocessor and `prepare_for_model` updated
   - Settings and env variables added
-  - API validation extended for new type
+  - Capability/requirement flags set on the definition (API validation and gates derive from them)
 
 - Frontend
-  - Model selectable in UI
-  - Form gating/validation updated
+  - Definition UI fields set (card renders from the registry)
+  - Capability/requirement flags set (gating derives from them)
   - Result view aligns with outputs
 
 - Docs & Tests
@@ -152,7 +149,7 @@ Model assets are used for:
 **Step 3: Integration**
 
 1. **Loader**: Ensure the model loader reads your `model_assets.json` and wires preprocessing accordingly.
-2. **Factory/registry**: If introducing a new built-in model type, register it in the model factory so the API can route requests properly.
+2. **Factory/registry**: If introducing a new built-in model type, register it in the model registry (a `definitions/<id>.py` file plus a `MODELS` entry) so the API can route requests properly.
 3. **Validation**: On startup or upload, validate that shapes are consistent with the serialized model.
 
 ### Validation and Testing
