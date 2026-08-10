@@ -1,0 +1,30 @@
+# CI-only override for GitHub-hosted runners. Layer it AFTER docker-compose.ci.yaml:
+#
+#   docker compose --profile ci \
+#     -f docker/docker-compose.ci.yaml \
+#     -f docker/docker-compose.ci.github.yaml \
+#     --env-file env/.env.default --env-file env/.env.ci \
+#     up --abort-on-container-exit --exit-code-from app
+#
+# The base ci profile declares astrodash-data as an EXTERNAL volume (the real,
+# populated data volume on a self-hosted host). A GitHub-hosted runner has no
+# such volume, so this override flips it to a local, ephemeral volume and skips
+# data initialization. The test suite excludes the download-tagged tests and
+# needs no model data, so it runs hermetically with no secrets and no data.
+#
+# `external: false` must be set explicitly: Compose merges top-level volumes by
+# key and keeps base keys an override omits, so an empty `astrodash-data: {}`
+# would retain the base's `external: true` and fail with
+# "external volume astrodash-data not found" on the runner.
+
+volumes:
+  astrodash-data:
+    external: false
+
+services:
+  app:
+    # SKIP_INITIALIZATION overrides .env.default's `false`. A service-level
+    # environment value wins over env_file. Without it the entrypoint would
+    # anonymously download the full (public) data set on every run.
+    environment:
+      - "SKIP_INITIALIZATION=true"
