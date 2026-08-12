@@ -29,11 +29,13 @@ from astrodash.infrastructure.ml.model_registry import (
 from astrodash.core.model_access import (
     EntryLinkRefused,
     begin_scope,
+    clear_selection,
     credential_matches,
     end_scope,
     live_scope_model_id,
     model_access_required,
     redeem_entry_link,
+    render_refusal,
     revalidate_session_model,
     scoped_flow_refusal,
 )
@@ -226,27 +228,6 @@ def twins_search(request):
 GATE_CREDENTIAL_ERROR = "That access code was not accepted. Please try again."
 
 
-def _render_gate_refusal(request, heading=None, message=None):
-    """Render the access-refusal page.
-
-    Args:
-        request: The current request.
-        heading: Optional heading override; the disclosure-minimal default is
-            used when omitted.
-        message: Optional message override, for a caller whose visitor already
-            knows which model they were using.
-
-    Returns:
-        HttpResponse: The refusal page, with status 403.
-    """
-    return render(
-        request,
-        "astrodash/model_gate_refused.html",
-        {"refusal_heading": heading, "refusal_message": message},
-        status=403,
-    )
-
-
 def model_gate(request, token):
     """Redeem a model-scoped entry link and prompt for the shared credential.
 
@@ -272,7 +253,7 @@ def model_gate(request, token):
     try:
         link = redeem_entry_link(token)
     except EntryLinkRefused:
-        return _render_gate_refusal(request)
+        return render_refusal(request)
 
     definition = get_definition(link.model_id)
     if definition is None or not definition.requires_credential:
@@ -596,8 +577,7 @@ def classify(request):
 
     # User chose "Use uploaded model" but no id in session → redirect to re-pick
     if selected_model_type == 'user_uploaded' and not selected_model_id:
-        request.session.pop('selected_model_type', None)
-        request.session.pop('selected_model_id', None)
+        clear_selection(request.session)
         messages.warning(request, "Please select an uploaded model again.")
         return HttpResponseRedirect(reverse('astrodash:model_selection') + '?action=classify')
 
@@ -965,7 +945,7 @@ def batch_process(request):
     """
     # A scoped session reaches classification only (R24), and a session whose
     # model stopped being selectable is returned to the picker (R35).
-    refusal = scoped_flow_refusal(request, action='batch')
+    refusal = scoped_flow_refusal(request)
     if refusal is not None:
         return refusal
     stale = revalidate_session_model(request, action='batch')

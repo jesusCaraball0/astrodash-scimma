@@ -361,8 +361,37 @@ REFUSED_GATED_WITHOUT_SCOPE = "gated_without_scope"
 REFUSED_SURFACE_NOT_OFFERED = "surface_not_offered"
 
 
+SURFACE_NOT_OFFERED_HEADING = "This view is not available"
+
+
+def render_refusal(request, heading=None, message=None):
+    """Render the access-refusal page.
+
+    Every refusal renders through here, whether it comes from the gate or from
+    the entry-link view, so the disclosure-minimal default cannot drift between
+    the two: a visitor who is refused must not be able to tell one refusal from
+    another.
+
+    Args:
+        request: The current request.
+        heading: Optional heading override; the disclosure-minimal default is
+            used when omitted.
+        message: Optional message override, for a caller whose visitor already
+            knows which model they were using.
+
+    Returns:
+        HttpResponse: The refusal page, with status 403.
+    """
+    return render(
+        request,
+        "astrodash/model_gate_refused.html",
+        {"refusal_heading": heading, "refusal_message": message},
+        status=403,
+    )
+
+
 def _refusal_for(request, reason, as_json):
-    """Build the response for a refused request.
+    """Build the response for a refused guarded request.
 
     Args:
         request: The current request.
@@ -375,15 +404,7 @@ def _refusal_for(request, reason, as_json):
     if reason == REFUSED_SCOPE_LAPSED:
         if as_json:
             return JsonResponse({"error": SCOPE_LAPSED_MESSAGE}, status=403)
-        return render(
-            request,
-            "astrodash/model_gate_refused.html",
-            {
-                "refusal_heading": SCOPE_LAPSED_HEADING,
-                "refusal_message": SCOPE_LAPSED_MESSAGE,
-            },
-            status=403,
-        )
+        return render_refusal(request, SCOPE_LAPSED_HEADING, SCOPE_LAPSED_MESSAGE)
 
     if reason == REFUSED_GATED_WITHOUT_SCOPE:
         if as_json:
@@ -396,23 +417,12 @@ def _refusal_for(request, reason, as_json):
             return HttpResponseRedirect(
                 reverse("astrodash:model_selection") + "?action=classify"
             )
-        return render(
-            request,
-            "astrodash/model_gate_refused.html",
-            {"refusal_heading": None, "refusal_message": None},
-            status=403,
-        )
+        return render_refusal(request)
 
     if as_json:
         return JsonResponse({"error": SURFACE_NOT_OFFERED_MESSAGE}, status=403)
-    return render(
-        request,
-        "astrodash/model_gate_refused.html",
-        {
-            "refusal_heading": "This view is not available",
-            "refusal_message": SURFACE_NOT_OFFERED_MESSAGE,
-        },
-        status=403,
+    return render_refusal(
+        request, SURFACE_NOT_OFFERED_HEADING, SURFACE_NOT_OFFERED_MESSAGE
     )
 
 
@@ -442,7 +452,25 @@ def clear_selection(session) -> None:
     session.modified = True
 
 
-def scoped_flow_refusal(request, action="classify"):
+def _teardown_if_lapsed(session) -> bool:
+    """End a scope that has passed its deadline.
+
+    The single place the lapse condition and its teardown live, so the gate and
+    the flow refusals cannot come to disagree about when a scope is over.
+
+    Args:
+        session: The request's session.
+
+    Returns:
+        True when a lapsed scope was found and torn down.
+    """
+    if scope_model_id(session) and scope_expired(session):
+        end_scope(session)
+        return True
+    return False
+
+
+def scoped_flow_refusal(request):
     """Refuse a flow a scoped session may not enter, or let it through.
 
     A scope reaches classification only, so the batch flow and the selection
@@ -452,14 +480,11 @@ def scoped_flow_refusal(request, action="classify"):
 
     Args:
         request: The current request.
-        action: The selection action this flow belongs to, used when a lapsed
-            scope has to send the visitor back to the picker.
 
     Returns:
         HttpResponse: The refusal, or ``None`` when the request may proceed.
     """
-    if scope_model_id(request.session) and scope_expired(request.session):
-        end_scope(request.session)
+    if _teardown_if_lapsed(request.session):
         return _refusal_for(request, REFUSED_SCOPE_LAPSED, as_json=False)
 
     if live_scope_model_id(request.session) is not None:
@@ -539,8 +564,7 @@ def evaluate_access(session, model_id, route_name):
         One of the ``REFUSED_*`` reasons, or ``None`` when the request may
         proceed.
     """
-    if scope_model_id(session) and scope_expired(session):
-        end_scope(session)
+    if _teardown_if_lapsed(session):
         return REFUSED_SCOPE_LAPSED
 
     if live_scope_model_id(session) is None:
