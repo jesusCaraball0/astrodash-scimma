@@ -7,6 +7,7 @@ from django.http import (
     JsonResponse,
 )
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.http import require_POST
 from django.urls import reverse
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +34,8 @@ from astrodash.core.model_access import (
     live_scope_model_id,
     model_access_required,
     redeem_entry_link,
+    revalidate_session_model,
+    scoped_flow_refusal,
 )
 from astrodash.surfaces import declared_surfaces
 from astrodash.services import (
@@ -298,10 +301,40 @@ def model_gate(request, token):
     return render(request, "astrodash/model_gate.html", context)
 
 
+@require_POST
+def end_model_scope(request):
+    """End a model-scoped session explicitly, discarding everything it produced.
+
+    A POST, because it changes server state; idempotent, so an unscoped visitor
+    (or a second click) simply lands back on the public picker. Navigating away
+    is deliberately not treated as an implicit end -- only this is.
+
+    Args:
+        request: The current request.
+
+    Returns:
+        HttpResponse: A redirect to the public model-selection page.
+    """
+    was_scoped = live_scope_model_id(request.session) is not None
+    end_scope(request.session)
+    if was_scoped:
+        messages.success(request, "Session ended. Choose a model to continue.")
+    return HttpResponseRedirect(
+        reverse('astrodash:model_selection') + '?action=classify'
+    )
+
+
 def model_selection(request):
     """
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
+    # A scoped session picks nothing: it is locked to one model, and its way out
+    # is the explicit end action, not this page. Refused before the POST handler
+    # so a hand-crafted selection cannot move a scope onto another model.
+    refusal = scoped_flow_refusal(request)
+    if refusal is not None:
+        return refusal
+
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
     # Listed model definitions drive the selection cards (title, description,
     # color, feature tags, icon, recommended badge, and order). An unlisted
@@ -538,6 +571,13 @@ def classify(request):
     """
     Handles spectrum classification via the UI.
     """
+    # A scope whose model has been published dissolves here, and a public
+    # session whose model stopped being selectable is returned to the picker
+    # (R35), before any of it reaches a classification.
+    stale = revalidate_session_model(request, action='classify')
+    if stale is not None:
+        return stale
+
     # The model that will actually run: the scope first, then the session's
     # selection (KTD10). Inside a scope the selection cannot influence which
     # model executes, so a stale user-model id is dropped with it.
@@ -923,6 +963,15 @@ def batch_process(request):
     Handles batch processing UI.
     Support for both ZIP file uploads and multiple individual file uploads.
     """
+    # A scoped session reaches classification only (R24), and a session whose
+    # model stopped being selectable is returned to the picker (R35).
+    refusal = scoped_flow_refusal(request, action='batch')
+    if refusal is not None:
+        return refusal
+    stale = revalidate_session_model(request, action='batch')
+    if stale is not None:
+        return stale
+
     # Get model selection from session (set by model_selection view)
     selected_model_type = request.session.get('selected_model_type')
     selected_model_id = request.session.get('selected_model_id', None)

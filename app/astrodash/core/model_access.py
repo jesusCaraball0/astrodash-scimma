@@ -416,6 +416,110 @@ def _refusal_for(request, reason, as_json):
     )
 
 
+# Shown when a scoped session asks for a flow the scope does not admit. It
+# points at the end action rather than simply refusing, because the visitor's
+# way out is to end the scope, not to navigate away.
+SCOPED_FLOW_UNAVAILABLE_MESSAGE = (
+    "This session is limited to one model, so only classification is "
+    "available. End the session to return to the model picker."
+)
+
+# Shown when a session's stored model is no longer one a visitor may select.
+MODEL_NO_LONGER_SELECTABLE_MESSAGE = (
+    "The model this session had selected is no longer available. Please choose "
+    "a model to continue."
+)
+
+
+def clear_selection(session) -> None:
+    """Drop a model selection the session may no longer use.
+
+    Args:
+        session: The request's session.
+    """
+    for key in SELECTION_SESSION_KEYS:
+        session.pop(key, None)
+    session.modified = True
+
+
+def scoped_flow_refusal(request, action="classify"):
+    """Refuse a flow a scoped session may not enter, or let it through.
+
+    A scope reaches classification only, so the batch flow and the selection
+    page -- both its rendered page and its POST handler -- are refused for a
+    scoped visitor and pointed back at the classification page, where the
+    explicit end action lives.
+
+    Args:
+        request: The current request.
+        action: The selection action this flow belongs to, used when a lapsed
+            scope has to send the visitor back to the picker.
+
+    Returns:
+        HttpResponse: The refusal, or ``None`` when the request may proceed.
+    """
+    if scope_model_id(request.session) and scope_expired(request.session):
+        end_scope(request.session)
+        return _refusal_for(request, REFUSED_SCOPE_LAPSED, as_json=False)
+
+    if live_scope_model_id(request.session) is not None:
+        messages.error(request, SCOPED_FLOW_UNAVAILABLE_MESSAGE)
+        return HttpResponseRedirect(reverse("astrodash:classify"))
+
+    return None
+
+
+def revalidate_session_model(request, action="classify"):
+    """Re-check the session's model on entry to a flow, per R35.
+
+    Two things can have changed under a session since it last ran: its model
+    may have been published (dissolving a scope that no longer has anything to
+    guard), or it may have become gated, unlisted, or retired (making a public
+    session's selection unusable). Both are settled here, on entry, rather than
+    being discovered halfway through a classification.
+
+    Only ids the registry resolves are revalidated: a user-uploaded selection
+    passes through untouched, or every uploaded-model visitor would be bounced
+    to the picker.
+
+    Args:
+        request: The current request.
+        action: The selection action to return to, ``"classify"`` or
+            ``"batch"``.
+
+    Returns:
+        HttpResponse: A redirect to the selection page when the session's model
+        is no longer selectable, or ``None`` when the request may proceed.
+    """
+    scoped = scope_model_id(request.session)
+    if scoped:
+        definition = get_definition(scoped)
+        if definition is not None and not definition.requires_credential:
+            # Published: there is nothing left to scope, so the scope dissolves
+            # into an ordinary selection of the same model.
+            end_scope(request.session)
+            request.session["selected_model_type"] = scoped
+        return None
+
+    selected = request.session.get("selected_model_type")
+    definition = get_definition(selected) if selected else None
+    if definition is None:
+        return None
+
+    if (
+        definition.requires_credential
+        or not definition.listed
+        or not definition.is_active
+    ):
+        clear_selection(request.session)
+        messages.error(request, MODEL_NO_LONGER_SELECTABLE_MESSAGE)
+        return HttpResponseRedirect(
+            reverse("astrodash:model_selection") + f"?action={action}"
+        )
+
+    return None
+
+
 def evaluate_access(session, model_id, route_name):
     """Decide whether a guarded request may proceed.
 
@@ -482,6 +586,11 @@ def model_access_required(route_name=None, *, from_classified=False, as_json=Fal
                 model_id = effective_model_id(request.session)
             reason = evaluate_access(request.session, model_id, route_name)
             if reason is not None:
+                if reason == REFUSED_GATED_WITHOUT_SCOPE and not from_classified:
+                    # The selection that pointed here is no longer one a visitor
+                    # may hold, so turning them away drops it too -- otherwise
+                    # the picker they land on still carries the stale pointer.
+                    clear_selection(request.session)
                 return _refusal_for(request, reason, as_json)
             return view_func(request, *args, **kwargs)
 

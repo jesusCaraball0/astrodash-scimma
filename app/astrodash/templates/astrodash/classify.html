@@ -116,6 +116,17 @@
                             <button type="button" class="btn btn-outline-secondary" onclick="clearForm()">Clear</button>
                         </div>
                     </form>
+                    {% if scoped_model_display %}
+                    {# Persistent, not only on a refused navigation: a reviewer
+                       who never leaves this page must still be able to end the
+                       session. Outside the form above, since forms cannot nest. #}
+                    <hr>
+                    <form method="post" action="{% url 'astrodash:end_model_scope' %}">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-outline-secondary btn-sm btn-block" id="end-scope-button">End session</button>
+                        <p class="small text-muted mt-2 mb-0">Ends this session and discards everything it produced.</p>
+                    </form>
+                    {% endif %}
                 </div>
             </div>
         </div>

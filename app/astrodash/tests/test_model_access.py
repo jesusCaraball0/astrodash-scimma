@@ -21,6 +21,7 @@ import re
 from contextlib import contextmanager
 from dataclasses import replace
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.contrib.auth import get_user_model
@@ -578,6 +579,223 @@ class ScopeEnforcementTests(TestCase):
         with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
             resp = self.client.get(reverse("astrodash:classify"))
         self.assertEqual(resp.status_code, 200)
+
+
+class ScopeBoundaryTests(TestCase):
+    """R24/R29/R33/R35: what a scope may reach, and what ending it discards."""
+
+    END_CONTROL_MARKER = 'id="end-scope-button"'
+
+    def _redeem(self, now=1000.0, ttl_seconds="3600"):
+        with gated_gate(ttl_seconds=ttl_seconds), patch.object(
+            model_access, "_now", return_value=now
+        ):
+            token = model_access.mint_entry_link("dash")
+            resp = self.client.post(
+                gate_url(token), data={"credential": GATE_CREDENTIAL}
+            )
+        self.assertEqual(resp.status_code, 302)
+        return self.client.session[model_access.SCOPE_DEADLINE_KEY]
+
+    # --- a scope reaches classification only ---
+
+    def test_batch_flow_is_refused_for_a_scoped_session(self):
+        """AE8: a scoped session may enter the classification flow only."""
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:batch_process_ui"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("astrodash:classify"))
+
+    def test_batch_refusal_surfaces_the_end_action(self):
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:batch_process_ui"), follow=True)
+        self.assertIn(self.END_CONTROL_MARKER, resp.content.decode())
+
+    def test_selection_page_is_refused_for_a_scoped_session(self):
+        self._redeem()
+        model_svc = MagicMock(list_models=AsyncMock(return_value=[]))
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), patch("astrodash.ui_views.get_model_service", return_value=model_svc):
+            resp = self.client.get(reverse("astrodash:model_selection"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("astrodash:classify"))
+
+    def test_selection_post_is_refused_for_a_scoped_session(self):
+        self._redeem()
+        model_svc = MagicMock(list_models=AsyncMock(return_value=[]))
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), patch("astrodash.ui_views.get_model_service", return_value=model_svc):
+            resp = self.client.post(
+                reverse("astrodash:model_selection"),
+                data={"model_type": "transformer", "action_type": "classify"},
+            )
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("astrodash:classify"))
+        session = self.client.session
+        self.assertEqual(session[model_access.SCOPE_MODEL_KEY], "dash")
+        # The POST did not move the selection either: a refused selection that
+        # still wrote the session would let a scope run a model it does not name.
+        self.assertEqual(session["selected_model_type"], "dash")
+
+    # --- the explicit end action ---
+
+    def test_end_control_renders_on_a_guarded_page_load(self):
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertIn(self.END_CONTROL_MARKER, resp.content.decode())
+
+    def test_ending_the_scope_returns_to_the_public_picker(self):
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.post(reverse("astrodash:end_model_scope"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            resp["Location"].startswith(reverse("astrodash:model_selection")),
+            resp["Location"],
+        )
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, self.client.session)
+
+    def test_ending_the_scope_discards_what_it_produced(self):
+        """AE12: a later twins request cannot be served from a retained embedding."""
+        self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), mocked_classification("dash"):
+            self.client.post(reverse("astrodash:classify"), data=classify_post("dash"))
+        self.assertEqual(
+            self.client.session.get("classify_dash_embedding"), [0.0] * 1024
+        )
+        with gated_gate(), patch.object(model_access, "_now", return_value=1002.0):
+            self.client.post(reverse("astrodash:end_model_scope"))
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn("classify_dash_embedding", self.client.session)
+
+    def test_teardown_leaves_no_artifact_or_selection_key(self):
+        self._redeem()
+        session = self.client.session
+        session["classify_results"] = {"best_matches": []}
+        session["classify_model_type"] = "dash"
+        session.save()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            self.client.post(reverse("astrodash:end_model_scope"))
+        session = self.client.session
+        survivors = [k for k in session.keys() if k.startswith("classify_")]
+        self.assertEqual(survivors, [])
+        for key in (
+            model_access.SELECTION_SESSION_KEYS + model_access.SCOPE_SESSION_KEYS
+        ):
+            self.assertNotIn(key, session)
+
+    def test_teardown_leaves_an_authenticated_visitor_logged_in(self):
+        user = get_user_model().objects.create_user(
+            username="reviewer-2", password="not-the-gate-credential"
+        )
+        self.client.force_login(user)
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            self.client.post(reverse("astrodash:end_model_scope"))
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(user.pk))
+
+    def test_end_action_is_idempotent_when_unscoped(self):
+        resp = self.client.post(reverse("astrodash:end_model_scope"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, self.client.session)
+
+    def test_logout_leaves_no_scope_and_no_artifact_behind(self):
+        user = get_user_model().objects.create_user(
+            username="reviewer-3", password="not-the-gate-credential"
+        )
+        self.client.force_login(user)
+        self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), mocked_classification("dash"):
+            self.client.post(reverse("astrodash:classify"), data=classify_post("dash"))
+        self.client.logout()
+        session = self.client.session
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, session)
+        self.assertEqual([k for k in session.keys() if k.startswith("classify_")], [])
+
+    # --- revalidation on entry ---
+
+    def test_public_session_whose_model_became_gated_is_turned_away(self):
+        """AE14: a stale selection cannot reach the gate."""
+        session = self.client.session
+        session["selected_model_type"] = "dash"
+        session.save()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            resp["Location"].startswith(reverse("astrodash:model_selection")),
+            resp["Location"],
+        )
+        self.assertIsNone(self.client.session.get("selected_model_type"))
+
+    def test_public_session_whose_model_became_unlisted_is_turned_away_from_batch(self):
+        session = self.client.session
+        session["selected_model_type"] = "dash"
+        session.save()
+        unlisted = tuple(
+            replace(m, listed=False) if m.id == "dash" else m
+            for m in model_registry.MODELS
+        )
+        with patch.object(model_registry, "MODELS", unlisted):
+            resp = self.client.get(reverse("astrodash:batch_process_ui"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            resp["Location"].startswith(reverse("astrodash:model_selection")),
+            resp["Location"],
+        )
+
+    def test_scope_whose_model_was_published_dissolves_on_the_next_request(self):
+        self._redeem()
+        # No gated roster: the model has been published since the scope began.
+        with gate_configured(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        session = self.client.session
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, session)
+        self.assertEqual(session.get("selected_model_type"), "dash")
+        self.assertNotIn(
+            ScopeEnforcementTests.SCOPED_CONTROL_MARKER, resp.content.decode()
+        )
+
+    def test_user_uploaded_session_passes_revalidation_untouched(self):
+        session = self.client.session
+        session["selected_model_type"] = "user_uploaded"
+        session["selected_model_id"] = "um-1"
+        session.save()
+        model_svc = MagicMock(
+            get_model=AsyncMock(return_value=SimpleNamespace(name="My model"))
+        )
+        with patch("astrodash.ui_views.get_model_service", return_value=model_svc):
+            classify_resp = self.client.get(reverse("astrodash:classify"))
+            batch_resp = self.client.get(reverse("astrodash:batch_process_ui"))
+        self.assertEqual(classify_resp.status_code, 200)
+        self.assertEqual(batch_resp.status_code, 200)
+        self.assertEqual(self.client.session["selected_model_type"], "user_uploaded")
+
+    # --- the two refusals speak to different audiences ---
+
+    def test_lapsed_refusal_says_the_window_ended_while_a_cold_link_does_not(self):
+        deadline = self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=deadline + 1
+        ):
+            lapsed = self.client.get(reverse("astrodash:classify"))
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            cold = self.client.get(gate_url("not-a-real-token"))
+        lapsed_body = lapsed.content.decode()
+        cold_body = cold.content.decode()
+        self.assertIn(model_access.SCOPE_LAPSED_HEADING, lapsed_body)
+        self.assertNotIn(model_access.SCOPE_LAPSED_HEADING, cold_body)
 
 
 class UngatedFlowUnaffectedTests(TestCase):
