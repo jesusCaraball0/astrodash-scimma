@@ -21,14 +21,22 @@ class AstroDashConfig(AppConfig):
         configuration fails in the init container, rather than starting and
         serving that model without a credential prompt.
 
+        The declared-surface check runs here for the same reason: the registry's
+        import-time validation cannot see the web layer's surface map without
+        inverting the layer boundary, and without a runtime caller a surface id
+        with no presentation would surface as a broken tab rather than a
+        refused startup.
+
         Raises:
             ValueError: If a model in the registry requires a credential while
                 any part of the gate configuration is unset, blank, or left at
-                a committed default.
+                a committed default, or if a model declares an empty, unknown,
+                or classification-less result surface list.
         """
         from astrodash.config.logging import get_logger
         from astrodash.core.gate_config import gate_configuration
         from astrodash.infrastructure.ml import model_registry
+        from astrodash.surfaces import known_surface_ids
 
         get_logger(__name__).info(
             "AstroDash starting with APP_VERSION=%s", settings.APP_VERSION
@@ -37,3 +45,4 @@ class AstroDashConfig(AppConfig):
         model_registry.validate_gate_configuration(
             model_registry.MODELS, gate_configuration()
         )
+        model_registry.validate_surfaces(model_registry.MODELS, known_surface_ids())

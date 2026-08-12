@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
+from astrodash import surfaces
 from astrodash.core import gate_config
 from astrodash.infrastructure.ml import model_registry as registry
 from astrodash.infrastructure.ml.classifiers.dash_classifier import DashClassifier
@@ -191,6 +192,138 @@ class RedshiftInputPolicyTests(SimpleTestCase):
         self.assertFalse(no_redshift.requires_redshift)
         # R15: declining redshift as an input says nothing about estimating one.
         self.assertTrue(no_redshift.supports_redshift_estimation)
+
+
+class SurfaceDeclarationTests(SimpleTestCase):
+    """R16/R18/R31/KD4: result surfaces are a declared, ordered list."""
+
+    def test_dash_declares_classification_then_dash_twins(self):
+        dash = registry.get_definition("dash")
+        self.assertEqual(
+            list(dash.surfaces),
+            [registry.SURFACE_CLASSIFICATION, registry.SURFACE_DASH_TWINS],
+        )
+
+    def test_transformer_declares_classification_only(self):
+        transformer = registry.get_definition("transformer")
+        self.assertEqual(list(transformer.surfaces), [registry.SURFACE_CLASSIFICATION])
+
+    def test_declared_surfaces_resolve_in_declared_order(self):
+        """AE7: DASH resolves both surfaces in order, Transformer only one."""
+        dash = registry.get_definition("dash")
+        transformer = registry.get_definition("transformer")
+        self.assertEqual(
+            [s.title for s in surfaces.resolve_surfaces(dash.surfaces)],
+            ["Classification", "DASH Twins"],
+        )
+        self.assertEqual(
+            [s.title for s in surfaces.resolve_surfaces(transformer.surfaces)],
+            ["Classification"],
+        )
+
+    def test_derived_twins_property_agrees_with_the_declared_list(self):
+        for model_id, declares_twins in (("dash", True), ("transformer", False)):
+            with self.subTest(model=model_id):
+                definition = registry.get_definition(model_id)
+                self.assertEqual(definition.supports_twins, declares_twins)
+                self.assertEqual(
+                    registry.SURFACE_DASH_TWINS in definition.surfaces,
+                    declares_twins,
+                )
+
+    def test_declared_list_is_the_sole_authority_for_twins(self):
+        """R31: flipping the declared list flips the derived twins answer."""
+        transformer = registry.get_definition("transformer")
+        gains_twins = replace(
+            transformer,
+            surfaces=(registry.SURFACE_CLASSIFICATION, registry.SURFACE_DASH_TWINS),
+        )
+        self.assertTrue(gains_twins.supports_twins)
+
+        dash = registry.get_definition("dash")
+        loses_twins = replace(dash, surfaces=(registry.SURFACE_CLASSIFICATION,))
+        self.assertFalse(loses_twins.supports_twins)
+
+    def test_capability_booleans_are_independent_of_the_surface_list(self):
+        """R30/KTD11: overlay, RLap, and redshift-estimation stay booleans."""
+        dash = registry.get_definition("dash")
+        no_twins_surface = replace(dash, surfaces=(registry.SURFACE_CLASSIFICATION,))
+        self.assertFalse(no_twins_surface.supports_twins)
+        self.assertTrue(no_twins_surface.supports_redshift_estimation)
+        self.assertTrue(no_twins_surface.supports_template_overlays)
+        self.assertTrue(no_twins_surface.supports_rlap)
+
+
+class SurfaceValidationTests(SimpleTestCase):
+    """R16/R17: a declared surface list is validated against the known ids."""
+
+    def _known_ids(self):
+        return surfaces.known_surface_ids()
+
+    def test_unknown_surface_id_is_rejected(self):
+        transformer = registry.get_definition("transformer")
+        dash = registry.get_definition("dash")
+        bogus = replace(
+            dash, surfaces=(registry.SURFACE_CLASSIFICATION, "no_such_surface")
+        )
+        with self.assertRaises(ValueError) as ctx:
+            registry.validate_surfaces((transformer, bogus), self._known_ids())
+        self.assertIn("no_such_surface", str(ctx.exception))
+        self.assertIn("dash", str(ctx.exception))
+
+    def test_empty_surface_list_is_rejected(self):
+        transformer = registry.get_definition("transformer")
+        dash = registry.get_definition("dash")
+        empty = replace(dash, surfaces=())
+        with self.assertRaises(ValueError) as ctx:
+            registry.validate_surfaces((transformer, empty), self._known_ids())
+        self.assertIn("dash", str(ctx.exception))
+
+    def test_surface_list_omitting_classification_is_rejected(self):
+        transformer = registry.get_definition("transformer")
+        dash = registry.get_definition("dash")
+        twins_only = replace(dash, surfaces=(registry.SURFACE_DASH_TWINS,))
+        with self.assertRaises(ValueError) as ctx:
+            registry.validate_surfaces((transformer, twins_only), self._known_ids())
+        self.assertIn(registry.SURFACE_CLASSIFICATION, str(ctx.exception))
+        self.assertIn("dash", str(ctx.exception))
+
+    def test_production_registry_declares_only_known_surfaces(self):
+        # Should not raise: this is the check the app-ready hook runs.
+        registry.validate_surfaces(registry.MODELS, self._known_ids())
+
+
+class SurfaceMapTests(SimpleTestCase):
+    """R30/KTD11: the web layer maps a surface id to its presentation."""
+
+    def test_every_declared_id_resolves_through_the_map(self):
+        for definition in registry.MODELS:
+            with self.subTest(model=definition.id):
+                resolved = surfaces.resolve_surfaces(definition.surfaces)
+                self.assertEqual([s.id for s in resolved], list(definition.surfaces))
+
+    def test_pane_identity_reproduces_todays_tab_markup(self):
+        classification = surfaces.get_surface(registry.SURFACE_CLASSIFICATION)
+        self.assertEqual(classification.tab_id, "classification-tab")
+        self.assertEqual(classification.pane_id, "classification-pane")
+
+        twins = surfaces.get_surface(registry.SURFACE_DASH_TWINS)
+        self.assertEqual(twins.tab_id, "twins-tab")
+        self.assertEqual(twins.pane_id, "twins-pane")
+        self.assertEqual(twins.title, "DASH Twins")
+
+    def test_twins_surface_owns_the_twins_supporting_routes(self):
+        twins = surfaces.get_surface(registry.SURFACE_DASH_TWINS)
+        self.assertEqual(
+            sorted(twins.routes),
+            ["dash_twins", "dash_twins_data", "twins_search"],
+        )
+
+    def test_unknown_surface_id_does_not_resolve(self):
+        self.assertIsNone(surfaces.get_surface("no_such_surface"))
+        with self.assertRaises(ValueError) as ctx:
+            surfaces.resolve_surfaces(("no_such_surface",))
+        self.assertIn("no_such_surface", str(ctx.exception))
 
 
 class GateConfigurationTests(SimpleTestCase):

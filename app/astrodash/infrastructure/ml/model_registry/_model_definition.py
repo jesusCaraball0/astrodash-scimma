@@ -25,6 +25,15 @@ REDSHIFT_INPUT_REQUIRED = "required"
 REDSHIFT_INPUT_OPTIONAL = "optional"
 REDSHIFT_INPUT_NONE = "none"
 
+# Result surface ids. A definition declares these as opaque identifiers; how a
+# surface presents itself (tab title, pane markup, supporting routes) is
+# web-layer knowledge and lives in ``astrodash.surfaces``, because nothing here
+# imports Django or knows about URL names. Every definition must declare
+# :data:`SURFACE_CLASSIFICATION` -- a model that classifies always has a
+# classification result to show.
+SURFACE_CLASSIFICATION = "classification"
+SURFACE_DASH_TWINS = "dash_twins"
+
 
 @dataclass(frozen=True)
 class ModelDefinition:
@@ -58,8 +67,11 @@ class ModelDefinition:
             render at all.
         preprocessing: Identifier of the preprocessing variant this model needs,
             consumed by the spectrum processing service (e.g. ``"dash"``).
-        supports_twins: Whether a classification with this model can seed the
-            FIND TWINS embedding search.
+        surfaces: Ordered ids of the result surfaces this model offers, the
+            first being the default tab. Only declared surfaces render, in this
+            order. The ids are opaque here and resolved through the web layer's
+            surface map; the list must be non-empty and must include
+            :data:`SURFACE_CLASSIFICATION`.
         supports_redshift_estimation: Whether template-based redshift estimation
             is offered for this model.
         supports_template_overlays: Whether the result view offers the template
@@ -82,7 +94,7 @@ class ModelDefinition:
     requires_credential: bool
     redshift_input: str
     preprocessing: str
-    supports_twins: bool
+    surfaces: Tuple[str, ...]
     supports_redshift_estimation: bool
     supports_template_overlays: bool
     supports_rlap: bool
@@ -101,3 +113,13 @@ class ModelDefinition:
         three-way policy keep working unchanged until they are migrated.
         """
         return self.redshift_input == REDSHIFT_INPUT_REQUIRED
+
+    @property
+    def supports_twins(self) -> bool:
+        """Whether a classification with this model can seed the twins search.
+
+        Derived from :attr:`surfaces` so the declared list is the sole
+        authority for the DASH Twins surface. The read site that predates the
+        list keeps working unchanged until it is migrated.
+        """
+        return SURFACE_DASH_TWINS in self.surfaces

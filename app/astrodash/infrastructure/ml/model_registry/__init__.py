@@ -19,7 +19,7 @@ registry for independently contributed models is a later runway, not built
 here.
 """
 
-from typing import Mapping, Optional, Tuple
+from typing import AbstractSet, Mapping, Optional, Tuple
 
 from astrodash.infrastructure.ml.model_registry._model_definition import (
     REDSHIFT_INPUT_NONE,
@@ -27,6 +27,8 @@ from astrodash.infrastructure.ml.model_registry._model_definition import (
     REDSHIFT_INPUT_REQUIRED,
     STATUS_ACTIVE,
     STATUS_RETIRED,
+    SURFACE_CLASSIFICATION,
+    SURFACE_DASH_TWINS,
     ModelDefinition,
 )
 from astrodash.infrastructure.ml.model_registry.definitions.dash import DASH
@@ -45,9 +47,12 @@ __all__ = [
     "REDSHIFT_INPUT_REQUIRED",
     "REDSHIFT_INPUT_OPTIONAL",
     "REDSHIFT_INPUT_NONE",
+    "SURFACE_CLASSIFICATION",
+    "SURFACE_DASH_TWINS",
     "MODELS",
     "validate_registry",
     "validate_gate_configuration",
+    "validate_surfaces",
     "get_definition",
     "active_definitions",
     "listed_definitions",
@@ -143,6 +148,49 @@ def validate_gate_configuration(
             f"left at a committed default: {missing}. "
             f"Gated models in the registry: {gated}."
         )
+
+
+def validate_surfaces(
+    models: Tuple[ModelDefinition, ...],
+    known_surface_ids: AbstractSet[str],
+) -> None:
+    """Validate the result surfaces every definition declares.
+
+    The known ids are passed in rather than imported, because a surface id only
+    means something once the web layer can render it, and nothing under the ML
+    infrastructure package imports Django or knows about URL names. The caller
+    (the app-ready hook) supplies the web layer's surface map keys, so an id
+    with no presentation refuses startup instead of rendering as a broken tab.
+
+    Args:
+        models: The collection of model definitions to check.
+        known_surface_ids: Every surface id the web layer can resolve.
+
+    Raises:
+        ValueError: If a definition declares no surfaces, omits the
+            classification surface, or declares an id the web layer does not
+            know. The message names the offending model and ids.
+    """
+    for model in models:
+        if not model.surfaces:
+            raise ValueError(
+                f"Model '{model.id}' declares no result surfaces; every model "
+                f"must declare at least '{SURFACE_CLASSIFICATION}'."
+            )
+
+        unknown = [s for s in model.surfaces if s not in known_surface_ids]
+        if unknown:
+            raise ValueError(
+                f"Model '{model.id}' declares unknown result surfaces: "
+                f"{unknown}. Known surfaces: {sorted(known_surface_ids)}."
+            )
+
+        if SURFACE_CLASSIFICATION not in model.surfaces:
+            raise ValueError(
+                f"Model '{model.id}' must declare the "
+                f"'{SURFACE_CLASSIFICATION}' surface; declared: "
+                f"{list(model.surfaces)}."
+            )
 
 
 def get_definition(model_id: str) -> Optional[ModelDefinition]:
