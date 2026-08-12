@@ -67,6 +67,11 @@ class Command(BaseCommand):
                 f"Model '{model_id}' does not require a credential, so it needs "
                 "no entry link. It is reachable through the normal flow."
             )
+        if not definition.is_active:
+            raise CommandError(
+                f"Model '{model_id}' is retired, so a link to it would be "
+                "refused on arrival. Nothing reaches a retired model."
+            )
 
         base_url = link_base_url()
         if base_url is None:

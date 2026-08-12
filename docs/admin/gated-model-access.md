@@ -49,8 +49,9 @@ or not gated, and it never prints the access code.
 
 The deadline is stamped into the link when it is minted. Changing
 `ASTRODASH_MODEL_GATE_LINK_TTL_SECONDS` afterwards does not move the deadline of
-a link that already exists — in either direction. To shorten access that is
-already out there, rotate the access code (below).
+a link that already exists — in either direction. Keep the window no longer than
+the access you actually intend to grant, because nothing shortens an outstanding
+link once it is minted.
 
 ## What to hand over
 
@@ -81,10 +82,15 @@ immediately.
 
 ## Rotating the access code
 
-One code covers every simultaneously gated model. Change the sealed secret and
-restart the pods; outstanding links then need the new code. There is no
-per-visitor code and no way to revoke a single link — if you need that, rotate
-and re-mint.
+One code covers every simultaneously gated model. Make it long and random — it
+is checked only for being set, so nothing else stops a short one from being
+guessed, and there is no attempt limit by design.
+
+Change the sealed secret and restart the pods. Rotation stops an outstanding
+link from being redeemed with the old code; it does **not** end a session that
+already redeemed one. Those sessions end at the deadline their link carried, or
+when the visitor ends them. There is no per-visitor code and no way to revoke a
+single link — if you need that, rotate, re-mint, and wait out the window.
 
 ## Publishing the model
 
@@ -102,9 +108,14 @@ out of a model that has just become public.
 Once no gated model remains in the roster, the gate configuration is no longer
 required for startup, though leaving the values in place is harmless.
 
-## One operational constraint
+## Two operational constraints
 
 The request profiler (Django Silk) is installed and its sample rate is
 environment-tunable. It can capture request bodies, which in this flow means the
 access code and uploaded spectra. Do not raise `SILKY_INTERCEPT_PERCENT` in an
 environment serving a gated model.
+
+The link carries its token in the URL path, so it lands in ingress and proxy
+access logs, in browser history, and in whatever the recipient forwards it
+through. Treat a link as one half of a credential pair: it is useless without
+the access code, which is why the two are sent separately.

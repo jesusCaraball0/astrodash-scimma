@@ -28,6 +28,7 @@ from astrodash.infrastructure.ml.model_registry import (
 )
 from astrodash.core.model_access import (
     EntryLinkRefused,
+    GateNotConfigured,
     begin_scope,
     clear_selection,
     credential_matches,
@@ -254,6 +255,14 @@ def model_gate(request, token):
         link = redeem_entry_link(token)
     except EntryLinkRefused:
         return render_refusal(request)
+    except GateNotConfigured:
+        # The route exists in every deployment, gated model or not, so a visitor
+        # can reach it while the gate is unconfigured -- which is the shipped
+        # default, since the roster carries no gated model and the startup check
+        # therefore never runs. Fail closed onto the refusal page rather than a
+        # framework error page: this may be the first thing a reviewer sees.
+        logger.error("Model gate: link presented while the gate is unconfigured")
+        return render_refusal(request)
 
     definition = get_definition(link.model_id)
     if definition is None or not definition.requires_credential:
@@ -270,7 +279,12 @@ def model_gate(request, token):
 
     context = {}
     if request.method == "POST":
-        if credential_matches(request.POST.get("credential")):
+        try:
+            accepted = credential_matches(request.POST.get("credential"))
+        except GateNotConfigured:
+            logger.error("Model gate: credential submitted while the gate is unconfigured")
+            return render_refusal(request)
+        if accepted:
             begin_scope(request.session, link)
             logger.info("Model gate: scope established for model_type=%s", link.model_id)
             return HttpResponseRedirect(reverse("astrodash:classify"))

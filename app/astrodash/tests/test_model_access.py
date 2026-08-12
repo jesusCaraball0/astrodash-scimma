@@ -39,6 +39,7 @@ from astrodash.tests.gate_fixtures import (
     gated_gate,
     gated_roster,
     mocked_classification,
+    redeem_scope,
 )
 
 
@@ -113,6 +114,110 @@ class EntryLinkTokenTests(TestCase):
         with patch.dict(os.environ, env):
             with self.assertRaises(model_access.GateNotConfigured):
                 model_access.mint_entry_link("dash")
+
+
+class UnconfiguredGateTests(TestCase):
+    """R34: the entry-link route exists everywhere, configured or not.
+
+    The route is registered in every deployment, but the startup check only
+    runs when the roster carries a gated model -- so in the shipped default the
+    gate is unconfigured and a visitor can still reach the route. It must fail
+    closed onto the refusal page rather than a framework error page.
+    """
+
+    REFUSAL_MARKER = 'id="model-gate-refused"'
+
+    def _unconfigured(self):
+        return patch.object(
+            model_access,
+            "gate_configuration",
+            return_value={
+                gate_config.CREDENTIAL_ENV_VAR: None,
+                gate_config.LINK_TTL_ENV_VAR: None,
+                gate_config.SIGNING_KEY_NAME: None,
+            },
+        )
+
+    def test_link_presented_to_an_unconfigured_gate_is_refused(self):
+        with self._unconfigured():
+            resp = self.client.get(gate_url("any-token-at-all"))
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn(self.REFUSAL_MARKER, resp.content.decode())
+
+    def test_credential_submitted_to_an_unconfigured_gate_is_refused(self):
+        # Mint while configured, then present the link to a deployment that is
+        # not: the token resolves only if the signing key is still readable.
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            token = model_access.mint_entry_link("dash")
+        with patch.object(model_registry, "MODELS", gated_roster()), patch.object(
+            model_access,
+            "gate_configuration",
+            return_value={
+                gate_config.CREDENTIAL_ENV_VAR: None,
+                gate_config.LINK_TTL_ENV_VAR: "3600",
+                gate_config.SIGNING_KEY_NAME: "test-entry-link-signing-key",
+            },
+        ), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.post(gate_url(token), data={"credential": "anything"})
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn(self.REFUSAL_MARKER, resp.content.decode())
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, self.client.session)
+
+
+class SessionIdentityTests(TestCase):
+    """Authorization is never written into a session id that predates it."""
+
+    def test_granting_a_scope_rotates_the_session_key(self):
+        # Give the client a session before it earns anything.
+        session = self.client.session
+        session["selected_model_type"] = "transformer"
+        session.save()
+        before = self.client.cookies["sessionid"].value
+
+        redeem_scope(self.client, self)
+
+        after = self.client.cookies["sessionid"].value
+        self.assertNotEqual(before, after)
+        self.assertEqual(self.client.session[model_access.SCOPE_MODEL_KEY], "dash")
+
+    def test_rotation_keeps_an_authenticated_visitor_logged_in(self):
+        user = get_user_model().objects.create_user(
+            username="reviewer-4", password="not-the-gate-credential"
+        )
+        self.client.force_login(user)
+        redeem_scope(self.client, self)
+        self.assertEqual(self.client.session.get("_auth_user_id"), str(user.pk))
+
+
+class ScopeExpiryEdgeTests(TestCase):
+    """The deadline check fails closed on a scope it cannot evaluate."""
+
+    def _session_with(self, deadline):
+        session = self.client.session
+        session[model_access.SCOPE_MODEL_KEY] = "dash"
+        if deadline is not None:
+            session[model_access.SCOPE_DEADLINE_KEY] = deadline
+        session.save()
+        return self.client.session
+
+    def test_scope_without_a_stored_deadline_is_expired(self):
+        with patch.object(model_access, "_now", return_value=1000.0):
+            self.assertTrue(model_access.scope_expired(self._session_with(None)))
+
+    def test_scope_with_an_unreadable_deadline_is_expired(self):
+        with patch.object(model_access, "_now", return_value=1000.0):
+            self.assertTrue(model_access.scope_expired(self._session_with("soon")))
+
+    def test_an_unevaluable_scope_refuses_the_classification_view(self):
+        self._session_with("soon")
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 403)
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, self.client.session)
+
+    def test_a_live_scope_is_not_expired(self):
+        with patch.object(model_access, "_now", return_value=1000.0):
+            self.assertFalse(model_access.scope_expired(self._session_with(2000.0)))
 
 
 class CredentialPromptTests(TestCase):
@@ -290,7 +395,7 @@ class ScopeEnforcementTests(TestCase):
     SCOPED_CONTROL_MARKER = 'id="scoped-model-name"'
 
     def _redeem(self, now=1000.0, ttl_seconds="3600", seed=None):
-        """Establish a scope by redeeming a fresh link.
+        """Establish a scope, optionally over seeded session state.
 
         Args:
             now: The POSIX timestamp to mint and redeem at.
@@ -304,15 +409,7 @@ class ScopeEnforcementTests(TestCase):
             session = self.client.session
             session.update(seed)
             session.save()
-        with gated_gate(ttl_seconds=ttl_seconds), patch.object(
-            model_access, "_now", return_value=now
-        ):
-            token = model_access.mint_entry_link("dash")
-            resp = self.client.post(
-                gate_url(token), data={"credential": GATE_CREDENTIAL}
-            )
-        self.assertEqual(resp.status_code, 302)
-        return self.client.session[model_access.SCOPE_DEADLINE_KEY]
+        return redeem_scope(self.client, self, now=now, ttl_seconds=ttl_seconds)
 
     def _seed_selection(self, **extra):
         session = self.client.session
@@ -459,15 +556,7 @@ class ScopeBoundaryTests(TestCase):
     END_CONTROL_MARKER = 'id="end-scope-button"'
 
     def _redeem(self, now=1000.0, ttl_seconds="3600"):
-        with gated_gate(ttl_seconds=ttl_seconds), patch.object(
-            model_access, "_now", return_value=now
-        ):
-            token = model_access.mint_entry_link("dash")
-            resp = self.client.post(
-                gate_url(token), data={"credential": GATE_CREDENTIAL}
-            )
-        self.assertEqual(resp.status_code, 302)
-        return self.client.session[model_access.SCOPE_DEADLINE_KEY]
+        return redeem_scope(self.client, self, now=now, ttl_seconds=ttl_seconds)
 
     # --- a scope reaches classification only ---
 
@@ -626,6 +715,52 @@ class ScopeBoundaryTests(TestCase):
             resp["Location"],
         )
 
+    def test_scope_whose_model_was_retired_is_released(self):
+        """R35: retirement makes a model unselectable, scope or no scope."""
+        self._redeem()
+        retired = tuple(
+            replace(m, status=model_registry.STATUS_RETIRED) if m.id == "dash" else m
+            for m in gated_roster()
+        )
+        with patch.object(
+            model_registry, "MODELS", retired
+        ), gate_configured(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            resp["Location"].startswith(reverse("astrodash:model_selection")),
+            resp["Location"],
+        )
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, self.client.session)
+
+    def test_mint_command_refuses_a_retired_gated_model(self):
+        retired = tuple(
+            replace(m, status=model_registry.STATUS_RETIRED) if m.id == "dash" else m
+            for m in gated_roster()
+        )
+        with patch.object(model_registry, "MODELS", retired), gate_configured():
+            with self.assertRaises(CommandError):
+                call_command("mint_model_link", "dash", stdout=StringIO())
+
+    def test_scoped_session_reaches_twins_search_after_classifying(self):
+        """The scoped happy path, not only its refusals."""
+        self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), mocked_classification("dash"):
+            self.client.post(reverse("astrodash:classify"), data=classify_post("dash"))
+        twins_svc = MagicMock(
+            find_twins=MagicMock(
+                return_value={"twin_indices": [1], "twin_similarities": [0.9]}
+            )
+        )
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1002.0
+        ), patch("astrodash.ui_views.get_twins_search_service", return_value=twins_svc):
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["twin_indices"], [1])
+
     def test_scope_whose_model_was_published_dissolves_on_the_next_request(self):
         self._redeem()
         # No gated roster: the model has been published since the scope began.
@@ -764,6 +899,29 @@ class MintCommandTests(TestCase):
             os.environ.pop(gate_config.LINK_BASE_URL_ENV_VAR, None)
             with self.assertRaises(CommandError):
                 call_command("mint_model_link", "dash", stdout=StringIO())
+
+
+class LinkBaseUrlTests(TestCase):
+    """The mint command's host is normalized, since it is pasted into a link."""
+
+    def _base_url(self, value):
+        with patch.dict(os.environ, {gate_config.LINK_BASE_URL_ENV_VAR: value}):
+            return gate_config.link_base_url()
+
+    def test_trailing_slash_is_stripped(self):
+        self.assertEqual(
+            self._base_url("https://astrodash-dev.example.org/"),
+            "https://astrodash-dev.example.org",
+        )
+
+    def test_surrounding_whitespace_is_stripped(self):
+        self.assertEqual(
+            self._base_url("  https://astrodash-dev.example.org  "),
+            "https://astrodash-dev.example.org",
+        )
+
+    def test_a_blank_value_is_unconfigured(self):
+        self.assertIsNone(self._base_url("   "))
 
 
 class SessionCookieSecurityTests(TestCase):

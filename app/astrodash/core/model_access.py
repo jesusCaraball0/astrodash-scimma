@@ -65,6 +65,12 @@ SCOPE_SESSION_KEYS = (SCOPE_MODEL_KEY, SCOPE_DEADLINE_KEY)
 # running a model it does not name.
 SELECTION_SESSION_KEYS = ("selected_model_type", "selected_model_id")
 
+# The session key holding the model the last classification ran, written by the
+# classify view. A supporting route that consumes a classification artifact
+# authorizes from this rather than from the selection (KTD5), so the two sides
+# are named here rather than agreeing by spelling.
+CLASSIFIED_MODEL_KEY = "classify_model_type"
+
 # Every session key a classification writes is prefixed with this, which makes
 # the artifact namespace sweepable: anything added under it is torn down without
 # being enumerated here.
@@ -259,6 +265,11 @@ def begin_scope(session, link: EntryLink) -> None:
         link: The redeemed entry link that grants the scope.
     """
     end_scope(session)
+    # Rotate the session identifier as the scope is granted, the way Django's
+    # own login() does: authorization must never be written into a session id
+    # that was in circulation before it was earned. cycle_key() keeps the
+    # session's data, so an authenticated visitor stays logged in.
+    session.cycle_key()
     session[SCOPE_MODEL_KEY] = link.model_id
     session[SCOPE_DEADLINE_KEY] = link.expires_at
     session["selected_model_type"] = link.model_id
@@ -390,13 +401,16 @@ def render_refusal(request, heading=None, message=None):
     )
 
 
-def _refusal_for(request, reason, as_json):
+def _refusal_for(request, reason, as_json, route_name=None):
     """Build the response for a refused guarded request.
 
     Args:
         request: The current request.
         reason: One of the ``REFUSED_*`` reasons.
         as_json: Whether the caller is a JSON route.
+        route_name: The guarded supporting route's name, or ``None`` for the
+            classification view -- the one page an ordinary visitor can land on
+            with a stale selection, and so the one returned to the picker.
 
     Returns:
         HttpResponse: The refusal.
@@ -409,8 +423,8 @@ def _refusal_for(request, reason, as_json):
     if reason == REFUSED_GATED_WITHOUT_SCOPE:
         if as_json:
             return JsonResponse({"error": SURFACE_NOT_OFFERED_MESSAGE}, status=403)
-        if request.path == reverse("astrodash:classify"):
-            # The classification page is the one an ordinary visitor can land on
+        if route_name is None:
+            # The classification view, which an ordinary visitor can land on
             # with a stale selection, so it is returned to the picker rather
             # than shown an error page.
             messages.error(request, GATED_WITHOUT_SCOPE_MESSAGE)
@@ -519,7 +533,16 @@ def revalidate_session_model(request, action="classify"):
     scoped = scope_model_id(request.session)
     if scoped:
         definition = get_definition(scoped)
-        if definition is not None and not definition.requires_credential:
+        if definition is None or not definition.is_active:
+            # The scoped model has been retired or removed since the scope was
+            # granted, so there is nothing left to reach. R35 covers this the
+            # same way it covers a public selection that stopped being usable.
+            end_scope(request.session)
+            messages.error(request, MODEL_NO_LONGER_SELECTABLE_MESSAGE)
+            return HttpResponseRedirect(
+                reverse("astrodash:model_selection") + f"?action={action}"
+            )
+        if not definition.requires_credential:
             # Published: there is nothing left to scope, so the scope dissolves
             # into an ordinary selection of the same model.
             end_scope(request.session)
@@ -605,7 +628,7 @@ def model_access_required(route_name=None, *, from_classified=False, as_json=Fal
         @wraps(view_func)
         def wrapper(request, *args, **kwargs):
             if from_classified:
-                model_id = request.session.get("classify_model_type")
+                model_id = request.session.get(CLASSIFIED_MODEL_KEY)
             else:
                 model_id = effective_model_id(request.session)
             reason = evaluate_access(request.session, model_id, route_name)
@@ -615,15 +638,18 @@ def model_access_required(route_name=None, *, from_classified=False, as_json=Fal
                     # may hold, so turning them away drops it too -- otherwise
                     # the picker they land on still carries the stale pointer.
                     clear_selection(request.session)
-                return _refusal_for(request, reason, as_json)
+                return _refusal_for(request, reason, as_json, route_name)
             return view_func(request, *args, **kwargs)
 
-        # Marker the coverage guard reads. A decorator is opt-in by nature, so a
+        # Markers the coverage guard reads. A decorator is opt-in by nature, so a
         # surface added later could silently omit the gate; the guard walks every
-        # route the surface map declares and asserts this attribute is present.
-        # ``functools.wraps`` copies it outward, so an additional decorator
-        # stacked above this one does not hide it.
+        # route the surface map declares and asserts not merely that the gate is
+        # applied but that it is bound to that route -- a gate applied without
+        # its route name would skip the surface check while still looking
+        # guarded. ``functools.wraps`` copies these outward, so an additional
+        # decorator stacked above this one does not hide them.
         wrapper.model_access_guarded = True
+        wrapper.model_access_route = route_name
         return wrapper
 
     return decorate

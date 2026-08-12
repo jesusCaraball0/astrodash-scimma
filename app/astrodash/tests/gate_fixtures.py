@@ -132,6 +132,29 @@ def classify_post(model: str) -> dict:
     }
 
 
+def redeem_scope(client, test_case, now=1000.0, ttl_seconds="3600", model_id="dash"):
+    """Establish a scope on a test client by redeeming a fresh entry link.
+
+    Args:
+        client: The Django test client to scope.
+        test_case: The calling ``TestCase``, used to assert the redemption
+            actually succeeded rather than silently leaving the client unscoped.
+        now: The POSIX timestamp to mint and redeem at.
+        ttl_seconds: The configured expiry window.
+        model_id: The built-in id to gate and scope to.
+
+    Returns:
+        float: The absolute deadline the scope was granted with.
+    """
+    with gated_gate(model_id, ttl_seconds=ttl_seconds), patch.object(
+        model_access, "_now", return_value=now
+    ):
+        token = model_access.mint_entry_link(model_id)
+        response = client.post(gate_url(token), data={"credential": GATE_CREDENTIAL})
+    test_case.assertEqual(response.status_code, 302)
+    return client.session[model_access.SCOPE_DEADLINE_KEY]
+
+
 @contextmanager
 def mocked_classification(model_type: str):
     """Run the classify view without model weights or network access.

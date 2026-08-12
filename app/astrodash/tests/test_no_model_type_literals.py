@@ -257,6 +257,20 @@ def _is_gated(view) -> bool:
     return getattr(view, "model_access_guarded", False) is True
 
 
+def _gated_route(view):
+    """Return the route name a view's gate is bound to.
+
+    Args:
+        view: The resolved view callable.
+
+    Returns:
+        The route name the gate authorizes against, or ``None`` -- which is both
+        the classification view's correct value and what an unguarded view
+        returns, so callers check :func:`_is_gated` first.
+    """
+    return getattr(view, "model_access_route", None)
+
+
 class GateCoverageTests(SimpleTestCase):
     """R9: every route the surface map declares carries the gate.
 
@@ -290,6 +304,26 @@ class GateCoverageTests(SimpleTestCase):
             "These routes can run a model without consulting the access gate. "
             "Apply @model_access_required to each: " + ", ".join(unguarded),
         )
+
+    def test_every_surface_route_gate_is_bound_to_that_route(self) -> None:
+        """A gate applied without its route name skips the surface check."""
+        misbound = []
+        for surface in SURFACES.values():
+            for name in surface.routes:
+                view = resolve(reverse(f"astrodash:{name}")).func
+                if _gated_route(view) != name:
+                    misbound.append(f"{name} (bound to {_gated_route(view)!r})")
+        self.assertFalse(
+            misbound,
+            "These surface routes carry the gate but not their own route name, "
+            "so the gate never checks that the model declares the surface: "
+            + ", ".join(misbound),
+        )
+
+    def test_the_classification_view_is_the_one_route_with_no_route_name(self) -> None:
+        view = resolve(reverse("astrodash:classify")).func
+        self.assertTrue(_is_gated(view))
+        self.assertIsNone(_gated_route(view))
 
     def test_the_guard_would_flag_an_unguarded_view(self) -> None:
         def plain_view(request):  # pragma: no cover - never called
@@ -350,9 +384,23 @@ class ScopedFlowSessionKeyTests(TestCase):
             model_access, "_now", return_value=1001.0
         ), mocked_classification("dash"):
             self.client.get(reverse("astrodash:classify"))
-            self.client.post(reverse("astrodash:classify"), data=classify_post("dash"))
+            classified = self.client.post(
+                reverse("astrodash:classify"), data=classify_post("dash")
+            )
         with gated_gate(), patch.object(model_access, "_now", return_value=1002.0):
             self.client.get(reverse("astrodash:dash_twins"))
+        # Positive control: without it, a scoped flow that silently stopped
+        # working would satisfy every absence assertion below.
+        self.assertEqual(classified.status_code, 200)
+        self.assertTrue(
+            [
+                k
+                for k in self.client.session.keys()
+                if k.startswith(model_access.ARTIFACT_KEY_PREFIX)
+            ],
+            "the scoped flow wrote no classification artifact, so the sweep "
+            "assertions below would pass vacuously",
+        )
 
     def test_scoped_flow_writes_no_unsweepable_session_key(self) -> None:
         self._run_scoped_flow()
