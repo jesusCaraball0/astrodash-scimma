@@ -1,0 +1,309 @@
+"""Entry links, the shared credential, and the model-scoped session.
+
+A model definition can declare that running it requires a shared credential
+(``requires_credential``). Such a model is reachable only by redeeming a
+*model-scoped entry link* -- a signed token naming one model and carrying an
+absolute deadline -- and then presenting the credential. A correct credential
+establishes a *scope*: a session locked to that one model, which expires no
+later than the link that created it.
+
+This module owns the mechanism; the views own the pages. It is deliberately
+small, because the gate is interim: it exists only because no identity layer is
+applied to the AstroDash views today, and the identity-and-access work retires
+it when that work lands.
+
+Three properties are load-bearing and each is easy to get subtly wrong:
+
+* **The deadline is stamped at mint, not evaluated later.** The token carries an
+  absolute expiry rather than being checked against the currently configured
+  window, so shortening that window cannot retroactively move an outstanding
+  link's deadline (nor lengthening it extend one).
+* **The scope carries that same absolute deadline in the session.** Django's
+  ``set_expiry`` treats an integer as *seconds of inactivity* and re-arms on
+  every session write -- and the classify flow writes on every submit -- so it
+  bounds idleness, not lifetime. It is kept only as a secondary bound; the
+  stored deadline is what the gate checks.
+* **Teardown deletes named keys and never calls ``flush()``.** The session is
+  shared with Django's auth framework, so flushing would log out an
+  authenticated visitor. Three key categories are swept: the scope keys, the
+  selection keys, and everything under the classification-artifact prefix.
+"""
+
+import hmac
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+from django.core import signing
+
+from astrodash.core.gate_config import (
+    CREDENTIAL_ENV_VAR,
+    LINK_TTL_ENV_VAR,
+    SIGNING_KEY_NAME,
+    gate_configuration,
+)
+
+# Salt distinct to this purpose, so a token minted here cannot be replayed
+# against any other signed value the project produces.
+ENTRY_LINK_SALT = "astrodash.model-access.entry-link"
+
+# Session keys holding the scope: the one model it names, and the absolute
+# deadline (a POSIX timestamp) it must not outlive.
+SCOPE_MODEL_KEY = "model_scope_model_type"
+SCOPE_DEADLINE_KEY = "model_scope_deadline"
+SCOPE_SESSION_KEYS = (SCOPE_MODEL_KEY, SCOPE_DEADLINE_KEY)
+
+# Session keys holding an ordinary (unscoped) model selection. Teardown clears
+# these too: a scope that left a prior selection standing is how a scope ends up
+# running a model it does not name.
+SELECTION_SESSION_KEYS = ("selected_model_type", "selected_model_id")
+
+# Every session key a classification writes is prefixed with this, which makes
+# the artifact namespace sweepable: anything added under it is torn down without
+# being enumerated here.
+ARTIFACT_KEY_PREFIX = "classify_"
+
+
+class GateNotConfigured(RuntimeError):
+    """Raised when the gate is used while its deployment values are missing.
+
+    Startup validation makes this unreachable for a deployment whose roster
+    contains a gated model, so it means the gate was driven in an environment
+    that never intended to serve one.
+    """
+
+
+class EntryLinkRefused(Exception):
+    """Raised for any entry link that does not grant access.
+
+    One exception covers tampering, a malformed payload, and a lapsed deadline
+    alike, because the refusal must disclose nothing about which models exist:
+    the caller cannot tell the cases apart, so it cannot leak them.
+    """
+
+
+@dataclass(frozen=True)
+class EntryLink:
+    """A redeemed entry link.
+
+    Attributes:
+        model_id: The one model the link names.
+        expires_at: Absolute POSIX timestamp the link -- and any scope it
+            establishes -- expires at.
+    """
+
+    model_id: str
+    expires_at: float
+
+
+def _now() -> float:
+    """Return the current time as a POSIX timestamp.
+
+    Indirection so tests can move time without touching the clock.
+
+    Returns:
+        The current POSIX timestamp.
+    """
+    return time.time()
+
+
+def _require(name: str) -> str:
+    """Read one normalized gate configuration value, or fail closed.
+
+    Args:
+        name: The configuration name, as an operator sets it.
+
+    Returns:
+        The configured value.
+
+    Raises:
+        GateNotConfigured: If the value is unset, blank, or left at a committed
+            default.
+    """
+    value = gate_configuration().get(name)
+    if value is None:
+        raise GateNotConfigured(
+            f"The model access gate is not configured: {name} is unset, empty, "
+            "or left at a committed default."
+        )
+    return value
+
+
+def link_ttl_seconds() -> int:
+    """Return the configured entry-link expiry window, in seconds.
+
+    Returns:
+        The window as a positive integer.
+
+    Raises:
+        GateNotConfigured: If the window is unconfigured.
+    """
+    return int(_require(LINK_TTL_ENV_VAR))
+
+
+def mint_entry_link(model_id: str, ttl_seconds: Optional[int] = None) -> str:
+    """Mint a signed entry-link token for one model.
+
+    The deadline is computed once, here, and travels inside the token, so the
+    link's lifetime is fixed at mint rather than re-derived at redemption.
+
+    Args:
+        model_id: The model the link grants access to.
+        ttl_seconds: Optional window override, in seconds; the configured
+            window is used when omitted.
+
+    Returns:
+        The signed token, to be placed in the entry-link path.
+
+    Raises:
+        GateNotConfigured: If the signing key or (absent an override) the
+            window is unconfigured.
+    """
+    window = link_ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
+    payload = {"model": model_id, "expires_at": _now() + window}
+    return signing.dumps(payload, key=_require(SIGNING_KEY_NAME), salt=ENTRY_LINK_SALT)
+
+
+def redeem_entry_link(token: str) -> EntryLink:
+    """Resolve an entry-link token, refusing anything that does not grant access.
+
+    The token is not loaded with a ``max_age``: the deadline it carries was
+    stamped at mint and is authoritative, so re-deriving one from the currently
+    configured window would let a configuration change move an outstanding
+    link's deadline. ``SignatureExpired`` subclasses ``BadSignature``, so the
+    single catch below covers it however the token was produced.
+
+    Args:
+        token: The signed token from the entry-link path.
+
+    Returns:
+        The resolved :class:`EntryLink`.
+
+    Raises:
+        EntryLinkRefused: If the token is malformed, signed with another key,
+            tampered with, or past its deadline.
+        GateNotConfigured: If the signing key is unconfigured.
+    """
+    key = _require(SIGNING_KEY_NAME)
+    try:
+        payload = signing.loads(token, key=key, salt=ENTRY_LINK_SALT)
+    except signing.BadSignature as exc:
+        raise EntryLinkRefused("Entry link is not valid.") from exc
+
+    model_id = payload.get("model") if isinstance(payload, dict) else None
+    expires_at = payload.get("expires_at") if isinstance(payload, dict) else None
+    if not model_id or not isinstance(expires_at, (int, float)):
+        raise EntryLinkRefused("Entry link is not valid.")
+
+    if _now() >= expires_at:
+        raise EntryLinkRefused("Entry link is not valid.")
+
+    return EntryLink(model_id=model_id, expires_at=float(expires_at))
+
+
+def credential_matches(submitted: Optional[str]) -> bool:
+    """Compare a submitted credential against the configured one, in constant time.
+
+    Args:
+        submitted: The credential as posted, or ``None`` when absent.
+
+    Returns:
+        True when it matches the configured shared credential.
+
+    Raises:
+        GateNotConfigured: If no credential is configured.
+    """
+    expected = _require(CREDENTIAL_ENV_VAR)
+    return hmac.compare_digest(str(submitted or ""), expected)
+
+
+def end_scope(session) -> None:
+    """Clear the scope, any model selection, and every classification artifact.
+
+    Never calls ``flush()``: the session is shared with Django's auth
+    framework, so flushing would log out an authenticated visitor along with
+    ending the scope. Both redemption and the explicit end call this, which is
+    why a prior *selection* is swept as well -- leaving one standing is how a
+    scope ends up running a model it does not name.
+
+    Args:
+        session: The request's session.
+    """
+    for key in SCOPE_SESSION_KEYS + SELECTION_SESSION_KEYS:
+        session.pop(key, None)
+    for key in [k for k in list(session.keys()) if k.startswith(ARTIFACT_KEY_PREFIX)]:
+        session.pop(key, None)
+    session.modified = True
+
+
+def begin_scope(session, link: EntryLink) -> None:
+    """Establish a session scoped to one model, bounded by its link's deadline.
+
+    Any prior scope, selection, and classification artifact is cleared first,
+    so the scope is written over a clean session rather than beside stale
+    state.
+
+    The scoped model is also written as the session's selection, so every
+    surface that already reads a selection sees the scoped model; the scope
+    keys remain the authority, and the gate resolves them first.
+
+    Args:
+        session: The request's session.
+        link: The redeemed entry link that grants the scope.
+    """
+    end_scope(session)
+    session[SCOPE_MODEL_KEY] = link.model_id
+    session[SCOPE_DEADLINE_KEY] = link.expires_at
+    session["selected_model_type"] = link.model_id
+
+    # Secondary bound only: Django re-arms this on every session write, so it
+    # caps idleness rather than lifetime. The stored deadline above is what the
+    # gate enforces.
+    remaining = int(max(0, link.expires_at - _now()))
+    session.set_expiry(remaining)
+
+
+def scope_model_id(session) -> Optional[str]:
+    """Return the model a session is scoped to, ignoring its deadline.
+
+    Args:
+        session: The request's session.
+
+    Returns:
+        The scoped model id, or ``None`` when the session holds no scope.
+    """
+    return session.get(SCOPE_MODEL_KEY)
+
+
+def scope_expired(session) -> bool:
+    """Whether a session's scope has passed the deadline it was granted with.
+
+    Args:
+        session: The request's session.
+
+    Returns:
+        True when a scope is present and its stored deadline has passed. A
+        scope with no stored deadline is treated as expired: it cannot be
+        proven to be within one.
+    """
+    if not scope_model_id(session):
+        return False
+    deadline = session.get(SCOPE_DEADLINE_KEY)
+    if not isinstance(deadline, (int, float)):
+        return True
+    return _now() >= deadline
+
+
+def live_scope_model_id(session) -> Optional[str]:
+    """Return the scoped model only while the scope is still within its deadline.
+
+    Args:
+        session: The request's session.
+
+    Returns:
+        The scoped model id, or ``None`` when there is no scope or it has
+        lapsed.
+    """
+    if scope_expired(session):
+        return None
+    return scope_model_id(session)

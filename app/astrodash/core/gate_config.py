@@ -34,6 +34,13 @@ CREDENTIAL_ENV_VAR = "ASTRODASH_MODEL_GATE_CREDENTIAL"
 LINK_TTL_ENV_VAR = "ASTRODASH_MODEL_GATE_LINK_TTL_SECONDS"
 SIGNING_KEY_NAME = "SECRET_KEY"
 
+# Base URL entry links are minted against. It is deliberately *not* part of
+# :func:`gate_configuration`, and so not part of the startup fail-closed check:
+# a deployment with no link host still serves an already-minted link correctly,
+# and only the operator minting a new one needs it. The app sits behind a proxy,
+# so the host is configured rather than inferred from a request.
+LINK_BASE_URL_ENV_VAR = "ASTRODASH_MODEL_GATE_LINK_BASE_URL"
+
 # Prefix of the placeholder signing key committed to the repository. Django
 # stamps generated placeholder keys with it, and a key carrying it is public.
 INSECURE_SIGNING_KEY_PREFIX = "django-insecure-"
@@ -88,6 +95,18 @@ def _signing_key() -> Optional[str]:
     if key is None or key.startswith(INSECURE_SIGNING_KEY_PREFIX):
         return None
     return key
+
+
+def link_base_url() -> Optional[str]:
+    """Return the base URL entry links are minted against.
+
+    Returns:
+        The configured base URL with any trailing slash removed, or ``None``
+        when it is unset, empty, or whitespace-only. Only the mint command
+        needs it, so an unconfigured value is not a startup failure.
+    """
+    base = _configured(os.environ.get(LINK_BASE_URL_ENV_VAR))
+    return base.rstrip("/") if base else None
 
 
 def gate_configuration() -> Dict[str, Optional[str]]:

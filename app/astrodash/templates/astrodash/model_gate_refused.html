@@ -1,0 +1,27 @@
+{% extends "astrodash/base.html" %}
+
+{#
+  Shown whenever an entry link does not grant access -- expired, malformed, or
+  tampered with -- and whenever a scope ends.
+
+  The default copy is disclosure-minimal and names no model: an anonymous
+  reviewer arriving on a cold link may see this before anything else, and it
+  must not confirm that any particular model exists. A caller that already
+  knows the visitor is inside the window (a lapsed scope, say) can pass its own
+  heading and message.
+#}
+
+{% block content %}
+<div class="container mt-5" style="max-width: 520px;">
+    <div class="card shadow-sm" id="model-gate-refused">
+        <div class="card-header bg-dark text-white">
+            <h5 class="mb-0">{{ refusal_heading|default:"This link is not available" }}</h5>
+        </div>
+        <div class="card-body">
+            <p class="mb-0">
+                {{ refusal_message|default:"This link is no longer valid. If you were given it and still need access, ask whoever sent it to you." }}
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}

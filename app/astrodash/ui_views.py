@@ -27,6 +27,13 @@ from astrodash.infrastructure.ml.model_registry import (
     get_definition,
     listed_definitions,
 )
+from astrodash.core.model_access import (
+    EntryLinkRefused,
+    begin_scope,
+    credential_matches,
+    end_scope,
+    redeem_entry_link,
+)
 from astrodash.surfaces import resolve_surfaces
 from astrodash.services import (
     get_config,
@@ -254,6 +261,87 @@ def twins_search(request):
     except Exception as e:
         logger.exception("twins_search failed")
         return JsonResponse({'error': str(e)}, status=500)
+
+
+# Shown when a valid, unexpired link is presented with the wrong credential.
+# Generic by design: it confirms nothing about the link, the model, or how close
+# the attempt was.
+GATE_CREDENTIAL_ERROR = "That access code was not accepted. Please try again."
+
+
+def _render_gate_refusal(request, heading=None, message=None):
+    """Render the access-refusal page.
+
+    Args:
+        request: The current request.
+        heading: Optional heading override; the disclosure-minimal default is
+            used when omitted.
+        message: Optional message override, for a caller whose visitor already
+            knows which model they were using.
+
+    Returns:
+        HttpResponse: The refusal page, with status 403.
+    """
+    return render(
+        request,
+        "astrodash/model_gate_refused.html",
+        {"refusal_heading": heading, "refusal_message": message},
+        status=403,
+    )
+
+
+def model_gate(request, token):
+    """Redeem a model-scoped entry link and prompt for the shared credential.
+
+    The only way into a gated model. A GET renders the prompt; a POST checks the
+    submitted credential and, when it matches, establishes a session scoped to
+    the link's model. The link's deadline is re-checked on both, so a link that
+    lapses between the prompt and the submit is refused rather than honored.
+
+    Every refusal -- expired, tampered, malformed -- renders the same page with
+    the same wording, so the response discloses nothing about which models
+    exist. A link whose model has since been published redirects into the normal
+    public flow instead of refusing, so a reviewer is never locked out of a
+    model that is now public.
+
+    Args:
+        request: The current request.
+        token: The signed entry-link token from the path.
+
+    Returns:
+        HttpResponse: The credential prompt, a redirect into the classification
+        flow, or the refusal page.
+    """
+    try:
+        link = redeem_entry_link(token)
+    except EntryLinkRefused:
+        return _render_gate_refusal(request)
+
+    definition = get_definition(link.model_id)
+    if definition is None or not definition.requires_credential:
+        # The model has been published (or left the registry) since the link was
+        # minted: there is nothing to gate, so the link becomes an ordinary way
+        # in rather than a refusal.
+        end_scope(request.session)
+        if definition is None:
+            return HttpResponseRedirect(
+                reverse("astrodash:model_selection") + "?action=classify"
+            )
+        request.session["selected_model_type"] = link.model_id
+        return HttpResponseRedirect(reverse("astrodash:classify"))
+
+    context = {}
+    if request.method == "POST":
+        if credential_matches(request.POST.get("credential")):
+            begin_scope(request.session, link)
+            logger.info("Model gate: scope established for model_type=%s", link.model_id)
+            return HttpResponseRedirect(reverse("astrodash:classify"))
+        # A wrong credential on a still-valid link is retryable: redisplay the
+        # prompt with a generic error rather than burning the link.
+        logger.warning("Model gate: credential rejected")
+        context["credential_error"] = GATE_CREDENTIAL_ERROR
+
+    return render(request, "astrodash/model_gate.html", context)
 
 
 def model_selection(request):

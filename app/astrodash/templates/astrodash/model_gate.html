@@ -1,0 +1,44 @@
+{% extends "astrodash/base.html" %}
+
+{#
+  The shared-credential prompt an entry link leads to.
+
+  Copy names no model: a visitor who reaches this page without the credential
+  must learn nothing about which model the link points at, or that any
+  particular model exists.
+#}
+
+{% block content %}
+<div class="container mt-5" style="max-width: 460px;">
+    <div class="card shadow-sm">
+        <div class="card-header bg-dark text-white">
+            <h5 class="mb-0">Access code required</h5>
+        </div>
+        <div class="card-body">
+            <p class="text-muted">
+                This link opens a model that is not yet publicly available. Enter the
+                access code you were given along with the link.
+            </p>
+            {% if credential_error %}
+            <div class="alert alert-danger" role="alert" id="model-gate-error">
+                {{ credential_error }}
+            </div>
+            {% endif %}
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label for="model-gate-credential">Access code</label>
+                    <input type="password"
+                           class="form-control"
+                           id="model-gate-credential"
+                           name="credential"
+                           autocomplete="off"
+                           autofocus
+                           required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Continue</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
