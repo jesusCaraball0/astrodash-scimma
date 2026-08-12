@@ -4,15 +4,24 @@ import json
 import ast
 
 from astrodash.infrastructure.ml.model_registry import (
-    active_definitions,
     default_definition,
     get_definition,
+    listed_definitions,
 )
 
 
 def _builtin_model_choices():
-    """Return (id, title) choices for the active built-in models, in registry order."""
-    return [(d.id, d.title) for d in active_definitions()]
+    """Return (id, title) choices for the listed built-in models, in registry order.
+
+    Listing, not lifecycle status, decides what a choice control offers: an
+    unlisted model must appear in no control an ordinary visitor can reach.
+    Because a ``ChoiceField`` also validates against its choices, dropping an
+    unlisted model here is what makes a hand-crafted POST naming it invalid.
+
+    Returns:
+        A list of ``(id, title)`` pairs in registry order.
+    """
+    return [(d.id, d.title) for d in listed_definitions()]
 
 
 def _classify_model_choices():

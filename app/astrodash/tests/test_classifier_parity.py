@@ -12,6 +12,7 @@ classification services mocked, so no weights or network access are needed.
 """
 
 import re
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,7 +21,8 @@ from django.http import HttpResponse
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from astrodash.forms import ClassifyForm
+from astrodash.forms import ClassifyForm, ModelSelectionForm
+from astrodash.infrastructure.ml import model_registry
 from astrodash.ui_views import _format_batch_results
 from astrodash.domain.services.redshift_service import RedshiftService
 from astrodash.domain.services.spectrum_processing_service import (
@@ -91,6 +93,105 @@ class SelectModelPageParityTests(TestCase):
         # The selected-state color is applied inline from data-color; no static
         # CSS rule keyed by data-model-type should remain.
         self.assertNotIn(".model-card.selected[data-model-type", visible)
+
+
+class UnlistedModelSurfaceTests(TestCase):
+    """AE1: an unlisted model leaves every surface an ordinary visitor reaches.
+
+    DASH is made unlisted (but active and ungated) for the duration of each
+    test, following the registry fixture idiom of ``dataclasses.replace`` over
+    a patched roster. Transformer is untouched, so it stays the listed, ungated
+    active default the registry invariants require, and doubles as the control
+    proving only the unlisted model disappeared.
+    """
+
+    def _unlisted_roster(self):
+        """Return a roster where DASH is active and ungated but not listed.
+
+        Returns:
+            tuple: A ``MODELS``-shaped tuple suitable for ``patch.object``.
+        """
+        transformer = model_registry.get_definition("transformer")
+        dash = model_registry.get_definition("dash")
+        return (transformer, replace(dash, listed=False))
+
+    def _render_visible(self, action):
+        """Render the select-model page for an action, comments stripped.
+
+        Args:
+            action: The ``action`` query value, ``"classify"`` or ``"batch"``.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed, so
+            the assertions see only selectable cards (the user-model/upload
+            cards live inside comments).
+        """
+        model_svc = MagicMock(list_models=AsyncMock(return_value=[]))
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()), patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ):
+            resp = self.client.get(
+                reverse("astrodash:model_selection") + f"?action={action}"
+            )
+        self.assertEqual(resp.status_code, 200)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    def test_unlisted_model_renders_no_card_for_classify_action(self):
+        visible = self._render_visible("classify")
+        self.assertNotIn("onclick=\"selectModel('dash')\"", visible)
+        self.assertIn("onclick=\"selectModel('transformer')\"", visible)
+
+    def test_unlisted_model_renders_no_card_for_batch_action(self):
+        visible = self._render_visible("batch")
+        self.assertNotIn("onclick=\"selectModel('dash')\"", visible)
+        self.assertIn("onclick=\"selectModel('transformer')\"", visible)
+
+    def test_unlisted_model_absent_from_classify_form_choices(self):
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()):
+            choices = [value for value, _ in ClassifyForm().fields["model"].choices]
+        self.assertNotIn("dash", choices)
+        self.assertIn("transformer", choices)
+        # The user-uploaded entry is unrelated to listing and stays put.
+        self.assertIn("user_uploaded", choices)
+
+    def test_unlisted_model_absent_from_selection_form_choices(self):
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()):
+            choices = [
+                value for value, _ in ModelSelectionForm().fields["model_type"].choices
+            ]
+        self.assertNotIn("dash", choices)
+        self.assertIn("transformer", choices)
+
+    def _post_selection(self, model_type):
+        """POST the selection form naming a model, with the model service mocked.
+
+        Args:
+            model_type: The ``model_type`` value to submit.
+
+        Returns:
+            The view's ``HttpResponse``.
+        """
+        model_svc = MagicMock(list_models=AsyncMock(return_value=[]))
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()), patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ):
+            return self.client.post(
+                reverse("astrodash:model_selection"),
+                data={"model_type": model_type, "action_type": "classify"},
+            )
+
+    def test_selection_post_naming_unlisted_model_is_refused(self):
+        resp = self._post_selection("dash")
+        # Refused: the page redisplays instead of redirecting into classify,
+        # and nothing is written to the session.
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("model_type", resp.context["form"].errors)
+        self.assertIsNone(self.client.session.get("selected_model_type"))
+
+    def test_selection_post_naming_listed_model_still_succeeds(self):
+        resp = self._post_selection("transformer")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.client.session.get("selected_model_type"), "transformer")
 
 
 class ClassifyFormRedshiftParityTests(TestCase):

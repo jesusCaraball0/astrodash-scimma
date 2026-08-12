@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
-from astrodash.infrastructure.ml.model_registry import active_definitions, get_definition
+from astrodash.infrastructure.ml.model_registry import get_definition, listed_definitions
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -181,9 +181,12 @@ def model_selection(request):
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
-    # Active model definitions drive the selection cards (title, description,
-    # color, feature tags, icon, recommended badge, and order).
-    model_definitions = active_definitions()
+    # Listed model definitions drive the selection cards (title, description,
+    # color, feature tags, icon, recommended badge, and order). An unlisted
+    # model renders no card here, for the classify action and the batch action
+    # alike; the selection form's choices are drawn from the same listing, so
+    # a POST naming an unlisted model is refused rather than silently accepted.
+    model_definitions = listed_definitions()
     form = ModelSelectionForm(request.POST or None, request.FILES or None)
 
     # Populate existing user model options (must be done before is_valid() on POST too)
