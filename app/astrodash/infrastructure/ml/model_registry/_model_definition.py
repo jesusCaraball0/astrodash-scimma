@@ -106,15 +106,6 @@ class ModelDefinition:
         return self.status == STATUS_ACTIVE
 
     @property
-    def requires_redshift(self) -> bool:
-        """Whether a redshift must be supplied to classify with this model.
-
-        Derived from :attr:`redshift_input` so the read sites that predate the
-        three-way policy keep working unchanged until they are migrated.
-        """
-        return self.redshift_input == REDSHIFT_INPUT_REQUIRED
-
-    @property
     def supports_twins(self) -> bool:
         """Whether a classification with this model can seed the twins search.
 

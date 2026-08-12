@@ -87,12 +87,14 @@
                                 {{ form.max_wave|as_crispy_field }}
                             </div>
                         </div>
+                        {% if show_redshift_controls %}
                         <div class="form-group">
                             {{ form.known_z|as_crispy_field }}
                         </div>
                         <div class="form-group">
                             {{ form.redshift|as_crispy_field }}
                         </div>
+                        {% endif %}
 
                         <div class="d-flex justify-content-between mt-3">
                             <button type="submit" class="btn btn-primary flex-grow-1 mr-2">Classify</button>

@@ -6,8 +6,19 @@ from django.urls import reverse
 from pathlib import Path
 from types import SimpleNamespace
 
-from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
-from astrodash.infrastructure.ml.model_registry import get_definition, listed_definitions
+from astrodash.forms import (
+    ClassifyForm,
+    BatchForm,
+    ModelSelectionForm,
+    REDSHIFT_REQUIRED_MESSAGE,
+    redshift_input_policy,
+    takes_redshift_input,
+)
+from astrodash.infrastructure.ml.model_registry import (
+    REDSHIFT_INPUT_REQUIRED,
+    get_definition,
+    listed_definitions,
+)
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -452,6 +463,9 @@ def classify(request):
         'selected_model_type': selected_model_type,
         'selected_model_id': selected_model_id,
         'selected_model_display': selected_model_display,
+        # Whether the model that will actually run takes a redshift as an input;
+        # a model that declines it renders neither redshift control.
+        'show_redshift_controls': takes_redshift_input(selected_model_type),
         'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
     }
 
@@ -775,7 +789,12 @@ def batch_process(request):
         return HttpResponseRedirect(reverse('astrodash:model_selection') + '?action=batch')
 
     form = BatchForm(request.POST or None, request.FILES or None)
-    context = {'form': form}
+    context = {
+        'form': form,
+        # Same policy the classification flow renders on: a model that takes no
+        # redshift shows neither redshift control here either.
+        'show_redshift_controls': takes_redshift_input(selected_model_type),
+    }
 
     if request.method == 'POST':
         logger.info(
@@ -789,12 +808,12 @@ def batch_process(request):
         files = request.FILES.getlist('files')
 
         if form.is_valid():
-            # Models whose definition requires a redshift (Transformer today)
-            # need one when known_z is not set.
-            batch_def = get_definition(selected_model_type)
-            if (batch_def is not None and batch_def.requires_redshift
+            # This gate is the batch flow's own, separate from the classify
+            # form's, but reads the same declared policy: only a model whose
+            # definition requires a redshift is refused for missing one.
+            if (redshift_input_policy(selected_model_type) == REDSHIFT_INPUT_REQUIRED
                     and form.cleaned_data.get('redshift') is None):
-                form.add_error('redshift', "Redshift is required for Transformer model.")
+                form.add_error('redshift', REDSHIFT_REQUIRED_MESSAGE)
             else:
                 try:
                     model_type = selected_model_type

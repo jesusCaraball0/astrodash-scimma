@@ -34,7 +34,7 @@ class DefinitionFieldsTests(SimpleTestCase):
     def test_dash_capability_fields(self):
         dash = registry.get_definition("dash")
         self.assertIsNotNone(dash)
-        self.assertFalse(dash.requires_redshift)
+        self.assertEqual(dash.redshift_input, registry.REDSHIFT_INPUT_OPTIONAL)
         self.assertTrue(dash.supports_twins)
         self.assertTrue(dash.supports_redshift_estimation)
         self.assertTrue(dash.supports_template_overlays)
@@ -46,7 +46,7 @@ class DefinitionFieldsTests(SimpleTestCase):
     def test_transformer_capability_fields(self):
         tr = registry.get_definition("transformer")
         self.assertIsNotNone(tr)
-        self.assertTrue(tr.requires_redshift)
+        self.assertEqual(tr.redshift_input, registry.REDSHIFT_INPUT_REQUIRED)
         self.assertFalse(tr.supports_twins)
         self.assertFalse(tr.supports_redshift_estimation)
         self.assertFalse(tr.supports_template_overlays)
@@ -175,22 +175,39 @@ class ListingTests(SimpleTestCase):
 
 
 class RedshiftInputPolicyTests(SimpleTestCase):
-    """R13/R15/KD5: a three-way input policy, with the old boolean derived."""
+    """R13/R15/KD5: redshift input is a three-way policy, and the sole authority."""
 
     def test_builtin_policies_match_todays_semantics(self):
         dash = registry.get_definition("dash")
         transformer = registry.get_definition("transformer")
         self.assertEqual(dash.redshift_input, registry.REDSHIFT_INPUT_OPTIONAL)
         self.assertEqual(transformer.redshift_input, registry.REDSHIFT_INPUT_REQUIRED)
-        # The derived property still answers exactly as the field used to.
-        self.assertFalse(dash.requires_redshift)
-        self.assertTrue(transformer.requires_redshift)
+
+    def test_the_three_policies_are_distinct(self):
+        self.assertEqual(
+            len(
+                {
+                    registry.REDSHIFT_INPUT_REQUIRED,
+                    registry.REDSHIFT_INPUT_OPTIONAL,
+                    registry.REDSHIFT_INPUT_NONE,
+                }
+            ),
+            3,
+        )
+
+    def test_no_derived_redshift_boolean_remains(self):
+        """KTD12: the boolean the policy replaced is gone, not shadowing it."""
+        dash = registry.get_definition("dash")
+        self.assertFalse(hasattr(dash, "requires_redshift"))
 
     def test_declining_redshift_is_not_requiring_it(self):
         dash = registry.get_definition("dash")
         no_redshift = replace(dash, redshift_input=registry.REDSHIFT_INPUT_NONE)
-        self.assertFalse(no_redshift.requires_redshift)
-        # R15: declining redshift as an input says nothing about estimating one.
+        self.assertNotEqual(
+            no_redshift.redshift_input, registry.REDSHIFT_INPUT_REQUIRED
+        )
+        # R15/AE5: declining redshift as an input says nothing about estimating
+        # one -- the model still produces a redshift estimate.
         self.assertTrue(no_redshift.supports_redshift_estimation)
 
 

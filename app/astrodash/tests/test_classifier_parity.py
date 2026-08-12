@@ -12,6 +12,7 @@ classification services mocked, so no weights or network access are needed.
 """
 
 import re
+from contextlib import nullcontext
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -211,11 +212,17 @@ class ClassifyFormRedshiftParityTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("redshift", form.errors)
         self.assertTrue(
-            any(
-                "Redshift is required for Transformer" in e
-                for e in form.errors["redshift"]
-            )
+            any("Redshift is required" in e for e in form.errors["redshift"])
         )
+
+    def test_required_redshift_message_names_no_model(self):
+        """R13: the message follows the policy, so it names no model literally."""
+        form = ClassifyForm(data=self._base_data("transformer"))
+        self.assertFalse(form.is_valid())
+        for error in form.errors["redshift"]:
+            self.assertNotIn("Transformer", error)
+            self.assertNotIn("transformer", error)
+            self.assertNotIn("Dash", error)
 
     def test_dash_does_not_require_redshift(self):
         form = ClassifyForm(data=self._base_data("dash"))
@@ -359,16 +366,211 @@ class BatchRedshiftGateParityTests(TestCase):
         self.assertIn("redshift", resp.context["form"].errors)
         self.assertTrue(
             any(
-                "Redshift is required for Transformer" in e
+                "Redshift is required" in e
                 for e in resp.context["form"].errors["redshift"]
             )
         )
+
+    def test_batch_required_redshift_message_names_no_model(self):
+        """R13: the batch gate's message follows the policy, naming no model."""
+        resp = self._post_batch("transformer")
+        for error in resp.context["form"].errors["redshift"]:
+            self.assertNotIn("Transformer", error)
+            self.assertNotIn("transformer", error)
+            self.assertNotIn("Dash", error)
 
     def test_dash_batch_does_not_require_redshift(self):
         resp = self._post_batch("dash")
         self.assertEqual(resp.status_code, 200)
         # DASH does not require a redshift, so the gate adds no redshift error
         # (the request instead falls through to the "no files uploaded" path).
+        self.assertNotIn("redshift", resp.context["form"].errors)
+
+
+class RedshiftInputPolicyFlowTests(TestCase):
+    """R13/R14/AE4: the three-way redshift input policy governs both UI flows.
+
+    A model declaring :data:`REDSHIFT_INPUT_NONE` takes no redshift at all, so
+    neither the redshift field nor the Known Redshift checkbox may render, and
+    a submission without a redshift must validate -- in the classification flow
+    and the batch flow alike, which run through two independent gates (the
+    classify form's ``clean`` and the batch view's own check).
+
+    DASH is the model whose policy is varied, following the registry fixture
+    idiom of ``dataclasses.replace`` over a patched roster; Transformer is left
+    untouched so it keeps satisfying the registry invariants and doubles as the
+    unchanged control.
+    """
+
+    # Markers for the two controls as crispy renders them.
+    REDSHIFT_FIELD_MARKER = 'id="id_redshift"'
+    KNOWN_Z_FIELD_MARKER = 'id="id_known_z"'
+
+    def _roster(self, policy):
+        """Return a roster where DASH declares the given redshift input policy.
+
+        Args:
+            policy: One of the ``REDSHIFT_INPUT_*`` constants.
+
+        Returns:
+            tuple: A ``MODELS``-shaped tuple suitable for ``patch.object``.
+        """
+        transformer = model_registry.get_definition("transformer")
+        dash = model_registry.get_definition("dash")
+        return (transformer, replace(dash, redshift_input=policy))
+
+    def _base_classify_data(self, model):
+        return {
+            "supernova_name": "SN2011fe",
+            "model": model,
+            "smoothing": 0,
+            "min_wave": 3500,
+            "max_wave": 10000,
+        }
+
+    def _render_visible(self, url_name, model_type, roster=None):
+        """GET a flow's page with a model selected and return its visible HTML.
+
+        Args:
+            url_name: The URL name to reverse (``astrodash:classify`` or
+                ``astrodash:batch_process_ui``).
+            model_type: The value to place in the session as the selected model.
+            roster: Optional ``MODELS``-shaped tuple to patch in for the request.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed, so
+            assertions see only what actually renders.
+        """
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        if model_type == "user_uploaded":
+            session["selected_model_id"] = "user-model-1"
+        session.save()
+
+        # The classify view resolves a display name for a user-uploaded model;
+        # mock the service so no DB/filesystem work happens.
+        model_svc = MagicMock(
+            get_model=AsyncMock(return_value=SimpleNamespace(name="My uploaded model"))
+        )
+        roster_patch = (
+            patch.object(model_registry, "MODELS", roster)
+            if roster is not None
+            else nullcontext()
+        )
+        with roster_patch, patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ):
+            resp = self.client.get(reverse(url_name))
+        self.assertEqual(resp.status_code, 200)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    def _post_batch(self, model_type, roster=None, **extra):
+        """POST the batch form for a selected model, with an optional roster."""
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        session.save()
+        data = {"smoothing": 0, "min_wave": 3500, "max_wave": 10000}
+        data.update(extra)
+        roster_patch = (
+            patch.object(model_registry, "MODELS", roster)
+            if roster is not None
+            else nullcontext()
+        )
+        with roster_patch:
+            return self.client.post(reverse("astrodash:batch_process_ui"), data=data)
+
+    # --- rendering: neither control for a model that declines redshift ---
+
+    def test_declining_model_renders_no_redshift_controls_in_classify(self):
+        """AE4: no redshift field and no Known Redshift checkbox."""
+        html = self._render_visible(
+            "astrodash:classify",
+            "dash",
+            self._roster(model_registry.REDSHIFT_INPUT_NONE),
+        )
+        self.assertNotIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertNotIn(self.KNOWN_Z_FIELD_MARKER, html)
+        # A control proving the form itself still rendered.
+        self.assertIn('id="id_smoothing"', html)
+
+    def test_declining_model_renders_no_redshift_controls_in_batch(self):
+        html = self._render_visible(
+            "astrodash:batch_process_ui",
+            "dash",
+            self._roster(model_registry.REDSHIFT_INPUT_NONE),
+        )
+        self.assertNotIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertNotIn(self.KNOWN_Z_FIELD_MARKER, html)
+        self.assertIn('id="id_smoothing"', html)
+
+    def test_optional_policy_still_renders_both_controls_in_classify(self):
+        html = self._render_visible("astrodash:classify", "dash")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_optional_policy_still_renders_both_controls_in_batch(self):
+        html = self._render_visible("astrodash:batch_process_ui", "dash")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_required_policy_still_renders_both_controls_in_classify(self):
+        html = self._render_visible("astrodash:classify", "transformer")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    # --- validation: a submission omitting redshift passes in both flows ---
+
+    def test_declining_model_validates_without_redshift_in_classify(self):
+        with patch.object(
+            model_registry, "MODELS", self._roster(model_registry.REDSHIFT_INPUT_NONE)
+        ):
+            form = ClassifyForm(data=self._base_classify_data("dash"))
+            self.assertTrue(form.is_valid(), form.errors)
+
+    def test_declining_model_validates_without_redshift_in_batch(self):
+        resp = self._post_batch(
+            "dash", roster=self._roster(model_registry.REDSHIFT_INPUT_NONE)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("redshift", resp.context["form"].errors)
+
+    def test_required_policy_rejects_missing_redshift_in_classify(self):
+        """The gate follows the policy, not the model: DASH made required fails."""
+        with patch.object(
+            model_registry,
+            "MODELS",
+            self._roster(model_registry.REDSHIFT_INPUT_REQUIRED),
+        ):
+            form = ClassifyForm(data=self._base_classify_data("dash"))
+            self.assertFalse(form.is_valid())
+            self.assertIn("redshift", form.errors)
+
+    def test_required_policy_rejects_missing_redshift_in_batch(self):
+        resp = self._post_batch(
+            "dash", roster=self._roster(model_registry.REDSHIFT_INPUT_REQUIRED)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("redshift", resp.context["form"].errors)
+
+    # --- KTD10: an unresolvable selection keeps today's optional behavior ---
+
+    def test_user_uploaded_selection_still_renders_both_controls(self):
+        html = self._render_visible("astrodash:classify", "user_uploaded")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_user_uploaded_selection_still_renders_both_controls_in_batch(self):
+        html = self._render_visible("astrodash:batch_process_ui", "user_uploaded")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_user_uploaded_selection_validates_without_redshift(self):
+        form = ClassifyForm(data=self._base_classify_data("user_uploaded"))
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_user_uploaded_batch_validates_without_redshift(self):
+        resp = self._post_batch("user_uploaded")
+        self.assertEqual(resp.status_code, 200)
         self.assertNotIn("redshift", resp.context["form"].errors)
 
 
