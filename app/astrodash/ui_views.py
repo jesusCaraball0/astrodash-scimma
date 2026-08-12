@@ -1,6 +1,12 @@
 from django.shortcuts import render
 from django.contrib import messages
-from django.http import HttpResponseRedirect, FileResponse, Http404, JsonResponse
+from django.http import (
+    HttpResponseRedirect,
+    HttpResponseForbidden,
+    FileResponse,
+    Http404,
+    JsonResponse,
+)
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.urls import reverse
 from pathlib import Path
@@ -16,9 +22,12 @@ from astrodash.forms import (
 )
 from astrodash.infrastructure.ml.model_registry import (
     REDSHIFT_INPUT_REQUIRED,
+    SURFACE_CLASSIFICATION,
+    SURFACE_DASH_TWINS,
     get_definition,
     listed_definitions,
 )
+from astrodash.surfaces import resolve_surfaces
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -127,12 +136,61 @@ def team_members(request):
     )
 
 
+# A model the registry cannot resolve -- a user-uploaded model -- offers the
+# classification surface alone (KTD10). It never renders zero tabs.
+FALLBACK_SURFACE_IDS = (SURFACE_CLASSIFICATION,)
+
+SURFACE_NOT_OFFERED_MESSAGE = "This result surface is not offered for this model."
+
+
+def _declared_surfaces(model_type):
+    """Resolve the result surfaces a model declares, in declared order.
+
+    Args:
+        model_type: A model id as held in the session -- the *selected* model
+            for a surface the visitor merely browses, the *classified* model
+            for a surface reading a classification artifact (KTD5). May be
+            ``None`` or a value the registry cannot resolve.
+
+    Returns:
+        tuple: The declared :class:`~astrodash.surfaces.Surface` entries, the
+        first of which is the default tab.
+    """
+    definition = get_definition(model_type) if model_type else None
+    surface_ids = (
+        definition.surfaces if definition is not None else FALLBACK_SURFACE_IDS
+    )
+    return resolve_surfaces(surface_ids)
+
+
+def _offers_route(model_type, route_name):
+    """Whether a model's declared surfaces own the given supporting route.
+
+    Args:
+        model_type: The model id that authorizes the route (see
+            :func:`_declared_surfaces` for which one that is).
+        route_name: The route's name in the ``astrodash`` URL namespace.
+
+    Returns:
+        bool: True when some declared surface lists the route as its own.
+    """
+    return any(
+        route_name in surface.routes for surface in _declared_surfaces(model_type)
+    )
+
+
 @xframe_options_sameorigin
 def dash_twins(request):
     """
     Renders the DASH Twins Explorer (embedding visualization).
     UI is in astrodash/explorer/dash_twins.html; data is loaded via dash_twins_data.
+
+    Authorized from the *selected* model per KTD5: the page shows a
+    model-agnostic global payload and reads no classification artifact, so it
+    stays browsable before any classification has run, exactly as today.
     """
+    if not _offers_route(request.session.get("selected_model_type"), "dash_twins"):
+        return HttpResponseForbidden(SURFACE_NOT_OFFERED_MESSAGE)
     return render(request, "astrodash/explorer/dash_twins.html")
 
 
@@ -140,7 +198,12 @@ def dash_twins_data(request):
     """
     Serves the DASH Twins payload JSON from {data_dir}/explorer (same as models, templates).
     Generate with extract_payload.py --build-artifacts (optionally --out-dir to data_dir/explorer).
+
+    Authorized from the *selected* model, for the same reason as the page it
+    feeds: the payload is global and carries nothing from a classification.
     """
+    if not _offers_route(request.session.get("selected_model_type"), "dash_twins_data"):
+        return JsonResponse({"error": SURFACE_NOT_OFFERED_MESSAGE}, status=403)
     path = Path(get_config().data_dir) / "explorer" / "dash_twins_payload.json"
     if not path.is_file():
         raise Http404("DASH Twins data not found. Run extract_payload.py --build-artifacts "
@@ -157,7 +220,13 @@ def twins_search(request):
     POST or GET: run twins search using the DASH embedding stored in session
     (set after classifying a spectrum with DASH). Returns JSON with query_umap,
     query_pca, twin_indices, twin_similarities, and optionally user_spectrum.
+
+    Authorized from the *classified* model per KTD5: this is the one twins
+    route that consumes a classification artifact (the stashed embedding), so
+    the model that produced that artifact decides whether it may be searched.
     """
+    if not _offers_route(request.session.get('classify_model_type'), 'twins_search'):
+        return JsonResponse({'error': SURFACE_NOT_OFFERED_MESSAGE}, status=403)
     import numpy as np
     embedding = request.session.get('classify_dash_embedding')
     if not embedding or not isinstance(embedding, list) or len(embedding) != 1024:
@@ -458,11 +527,17 @@ def classify(request):
             selected_model_display = (um.name or "").strip() or selected_model_id
         except Exception:
             selected_model_display = "User uploaded model"
+    # Result surfaces (the tab strip and its panes) come from the *selected*
+    # model's declared list per KTD5, so a fresh page load already shows every
+    # tab the chosen model offers, before any classification has run.
+    result_surfaces = _declared_surfaces(selected_model_type)
     context = {
         'form': form,
         'selected_model_type': selected_model_type,
         'selected_model_id': selected_model_id,
         'selected_model_display': selected_model_display,
+        'result_surfaces': result_surfaces,
+        'result_surface_ids': tuple(surface.id for surface in result_surfaces),
         # Whether the model that will actually run takes a redshift as an input;
         # a model that declines it renders neither redshift control.
         'show_redshift_controls': takes_redshift_input(selected_model_type),
@@ -670,8 +745,10 @@ def classify(request):
                 _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
 
                 # Store the embedding in session for "Find Twins" only when the
-                # model supports twins and the embedding is present.
-                if (classified_def is not None and classified_def.supports_twins
+                # classified model declares the twins surface (the declared
+                # list is the sole authority, R31) and the embedding is present.
+                if (classified_def is not None
+                        and SURFACE_DASH_TWINS in classified_def.surfaces
                         and isinstance(classification.results.get('embedding'), list)
                         and len(classification.results['embedding']) == 1024):
                     request.session['classify_dash_embedding'] = classification.results['embedding']

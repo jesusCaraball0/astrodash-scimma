@@ -104,13 +104,3 @@ class ModelDefinition:
     def is_active(self) -> bool:
         """Whether the model is currently active (not retired)."""
         return self.status == STATUS_ACTIVE
-
-    @property
-    def supports_twins(self) -> bool:
-        """Whether a classification with this model can seed the twins search.
-
-        Derived from :attr:`surfaces` so the declared list is the sole
-        authority for the DASH Twins surface. The read site that predates the
-        list keeps working unchanged until it is migrated.
-        """
-        return SURFACE_DASH_TWINS in self.surfaces

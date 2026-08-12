@@ -22,20 +22,24 @@
         ">
         &larr;
     </a>
-    <!-- Tabs: Classification | DASH Twins -->
+    <!--
+      Tabs: one per result surface the selected model declares, in declared
+      order, the first being the default. The strip, the panes, and the
+      supporting-route guards all read the same list (astrodash/surfaces.py),
+      so a new surface is registered once and no conditional is keyed on a
+      model here.
+    -->
     <ul class="nav nav-tabs mb-3" id="classifyTabs" role="tablist">
+        {% for surface in result_surfaces %}
         <li class="nav-item" role="presentation">
-            <a class="nav-link active" id="classification-tab" data-toggle="tab" href="#classification-pane" role="tab" aria-controls="classification-pane" aria-selected="true">Classification</a>
+            <a class="nav-link{% if forloop.first %} active{% endif %}" id="{{ surface.tab_id }}" data-toggle="tab" href="#{{ surface.pane_id }}" role="tab" aria-controls="{{ surface.pane_id }}" aria-selected="{% if forloop.first %}true{% else %}false{% endif %}">{{ surface.title }}</a>
         </li>
-        {% if selected_model_type == 'dash' %}
-        <li class="nav-item" role="presentation">
-            <a class="nav-link" id="twins-tab" data-toggle="tab" href="#twins-pane" role="tab" aria-controls="twins-pane" aria-selected="false">DASH Twins</a>
-        </li>
-        {% endif %}
+        {% endfor %}
     </ul>
 
     <div class="tab-content" id="classifyTabContent">
-        <div class="tab-pane fade show active" id="classification-pane" role="tabpanel" aria-labelledby="classification-tab">
+        {% for surface in result_surfaces %}{% if surface.id == 'classification' %}
+        <div class="tab-pane fade{% if forloop.first %} show active{% endif %}" id="{{ surface.pane_id }}" role="tabpanel" aria-labelledby="{{ surface.tab_id }}">
     <div class="row">
         <!-- Sidebar: Input Form -->
         <div class="col-md-3">
@@ -113,7 +117,7 @@
                     <h4 class="mb-0">Spectrum Analysis</h4>
                     <div class="mt-2 mt-md-0">
                         <button type="button" class="btn btn-outline-primary btn-sm mr-2" id="customize-plot-btn" aria-label="Customize plot overlays">CUSTOMIZE PLOT</button>
-                        {% if selected_model_type == 'dash' and has_dash_embedding %}
+                        {% if 'dash_twins' in result_surface_ids and has_dash_embedding %}
                         <a href="#" class="btn btn-primary btn-sm mr-2" id="find-twins-btn" aria-label="Find twins in DASH embedding space">FIND TWINS</a>
                         {% endif %}
                         <button type="button" class="btn btn-outline-secondary btn-sm" id="save-plot-btn" aria-label="Save plot">SAVE</button>
@@ -272,12 +276,12 @@
         </div>
     </div>
         </div>
-        {% if selected_model_type == 'dash' %}
-        <!-- DASH Twins tab: embedded explorer -->
-        <div class="tab-pane fade" id="twins-pane" role="tabpanel" aria-labelledby="twins-tab">
+        {% elif surface.id == 'dash_twins' %}
+        <!-- DASH Twins pane: the embedded explorer, its own supporting routes. -->
+        <div class="tab-pane fade{% if forloop.first %} show active{% endif %}" id="{{ surface.pane_id }}" role="tabpanel" aria-labelledby="{{ surface.tab_id }}">
             <iframe id="dash-twins-iframe" src="{% url 'astrodash:dash_twins' %}" title="DASH Twins Explorer" style="width: 100%; height: calc(100vh - 180px); min-height: 600px; border: 1px solid #dee2e6; border-radius: 4px;"></iframe>
         </div>
-        {% endif %}
+        {% endif %}{% endfor %}
     </div>
 </div>
 

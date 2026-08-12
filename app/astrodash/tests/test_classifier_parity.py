@@ -11,15 +11,20 @@ exercised by driving the classify view with the spectrum/processing/
 classification services mocked, so no weights or network access are needed.
 """
 
+import json
 import re
+import tempfile
 from contextlib import nullcontext
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
+from django.core.signals import request_finished
+from django.db import close_old_connections
 from django.http import HttpResponse
-from django.test import Client, TestCase
+from django.test import Client, SimpleTestCase, TestCase
 from django.urls import reverse
 
 from astrodash.forms import ClassifyForm, ModelSelectionForm
@@ -638,3 +643,264 @@ class ClassifyViewGateParityTests(TestCase):
         session = self._run_classify("transformer")
         self.assertNotIn("classify_dash_embedding", session)
         self.assertFalse(session.get("classify_show_templates_section"))
+
+
+class ResultSurfaceRenderingTests(TestCase):
+    """R17/R20/AE7: the tab strip and panes come from the declared list.
+
+    Per KTD5 the strip renders from the *selected* model, not the classified
+    one: today a DASH-selected page shows the DASH Twins tab before any
+    classification has run, and that must stay true. Every test here therefore
+    drives a session with a selection and no classification artifacts at all.
+    """
+
+    CLASSIFICATION_TAB = 'id="classification-tab"'
+    CLASSIFICATION_PANE = 'id="classification-pane"'
+    TWINS_TAB = 'id="twins-tab"'
+    TWINS_PANE = 'id="twins-pane"'
+
+    def _render_visible(self, model_type):
+        """GET the classify page with a model selected and nothing classified.
+
+        Args:
+            model_type: The value to place in the session as the selected model.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed.
+        """
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        if model_type == "user_uploaded":
+            session["selected_model_id"] = "user-model-1"
+        session.save()
+
+        model_svc = MagicMock(
+            get_model=AsyncMock(return_value=SimpleNamespace(name="My uploaded model"))
+        )
+        with patch("astrodash.ui_views.get_model_service", return_value=model_svc):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 200)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    @staticmethod
+    def _tag_with_id(html, dom_id):
+        """Return the opening tag carrying ``id="<dom_id>"``, or ``None``."""
+        match = re.search(r"<[a-z]+[^>]*\bid=\"%s\"[^>]*>" % re.escape(dom_id), html)
+        return match.group(0) if match else None
+
+    def test_dash_renders_both_tabs_in_declared_order_before_any_classification(self):
+        """AE7: DASH offers Classification then DASH Twins, pre-classification."""
+        html = self._render_visible("dash")
+        self.assertIn(self.CLASSIFICATION_TAB, html)
+        self.assertIn(self.TWINS_TAB, html)
+        self.assertIn("DASH Twins", html)
+        # Declared order: Classification first, DASH Twins second.
+        self.assertLess(html.index(self.CLASSIFICATION_TAB), html.index(self.TWINS_TAB))
+
+    def test_dash_renders_both_panes_wired_to_their_tabs(self):
+        html = self._render_visible("dash")
+        for tab, pane in (
+            (self.CLASSIFICATION_TAB, "classification-pane"),
+            (self.TWINS_TAB, "twins-pane"),
+        ):
+            with self.subTest(tab=tab):
+                anchor = self._tag_with_id(html, tab.split('"')[1])
+                self.assertIsNotNone(anchor)
+                self.assertIn(f'href="#{pane}"', anchor)
+                self.assertIn(f'aria-controls="{pane}"', anchor)
+                self.assertIsNotNone(self._tag_with_id(html, pane))
+
+    def test_first_declared_surface_is_the_active_tab_and_pane(self):
+        """R17: the first declared surface is the default, the rest are not."""
+        html = self._render_visible("dash")
+        classification_tab = self._tag_with_id(html, "classification-tab")
+        twins_tab = self._tag_with_id(html, "twins-tab")
+        self.assertIn("active", classification_tab)
+        self.assertIn('aria-selected="true"', classification_tab)
+        self.assertNotIn("active", twins_tab)
+        self.assertIn('aria-selected="false"', twins_tab)
+
+        classification_pane = self._tag_with_id(html, "classification-pane")
+        twins_pane = self._tag_with_id(html, "twins-pane")
+        self.assertIn("show active", classification_pane)
+        self.assertNotIn("show active", twins_pane)
+
+    def test_transformer_renders_only_the_classification_tab(self):
+        """AE7: Transformer declares Classification only, so no twins tab."""
+        html = self._render_visible("transformer")
+        self.assertIn(self.CLASSIFICATION_TAB, html)
+        self.assertNotIn(self.TWINS_TAB, html)
+        self.assertNotIn(self.TWINS_PANE, html)
+        self.assertNotIn("DASH Twins", html)
+        self.assertIn("show active", self._tag_with_id(html, "classification-pane"))
+
+    def test_user_uploaded_selection_renders_only_the_classification_tab(self):
+        """KTD10: an unresolvable selection falls back to Classification alone."""
+        html = self._render_visible("user_uploaded")
+        self.assertIn(self.CLASSIFICATION_TAB, html)
+        self.assertNotIn(self.TWINS_TAB, html)
+        self.assertNotIn(self.TWINS_PANE, html)
+        self.assertIn("show active", self._tag_with_id(html, "classification-pane"))
+
+    def test_classification_pane_content_still_renders(self):
+        """R21: moving the pane under the loop must not drop its markup."""
+        html = self._render_visible("dash")
+        self.assertIn('id="id_smoothing"', html)
+        self.assertIn("Input Parameters", html)
+
+
+class ClassifyTemplateLiteralGuardTests(SimpleTestCase):
+    """R20/R22: no per-model conditional survives in the classify template."""
+
+    TEMPLATE = (
+        Path(__file__).resolve().parent.parent
+        / "templates"
+        / "astrodash"
+        / "classify.html"
+    )
+
+    # A conditional comparison against a quoted built-in model id, in either
+    # order, mirroring ``test_no_model_type_literals.py``'s guard.
+    PATTERN = re.compile(
+        r"""(?:==|!=)\s*(?P<q1>['"])(?:dash|transformer|user_uploaded)(?P=q1)"""
+        r"""|(?P<q2>['"])(?:dash|transformer|user_uploaded)(?P=q2)\s*(?:==|!=)"""
+    )
+
+    def test_no_per_model_conditional_in_the_classification_template(self):
+        offenders = [
+            f"  classify.html:{lineno}: {line.strip()}"
+            for lineno, line in enumerate(
+                self.TEMPLATE.read_text(encoding="utf-8").splitlines(), start=1
+            )
+            if self.PATTERN.search(line)
+        ]
+        self.assertFalse(
+            offenders,
+            "Found per-model conditionals in the classification template. "
+            "Result surfaces render from the selected model's declared "
+            "surface list, so no tab, pane, or control may be keyed on a "
+            "model id:\n" + "\n".join(offenders),
+        )
+
+
+class TwinsSupportingRouteGuardTests(TestCase):
+    """R19/AE6: an undeclared surface's routes are unreachable, not just hidden.
+
+    KTD5 splits the authority by route. ``twins_search`` reads the embedding a
+    classification stashed, so it authorizes from the *classified* model. The
+    twins page and its data route serve a model-agnostic payload with no
+    session dependency, so they authorize from the *selected* model -- which is
+    what keeps them reachable before any classification has run, exactly as
+    today.
+    """
+
+    EMBEDDING = [0.0] * 1024
+
+    def _session(self, selected=None, classified=None, embedding=False):
+        """Seed the session with a selection, a classification, or both."""
+        session = self.client.session
+        if selected is not None:
+            session["selected_model_type"] = selected
+        if classified is not None:
+            session["classify_model_type"] = classified
+        if embedding:
+            session["classify_dash_embedding"] = list(self.EMBEDDING)
+        session.save()
+
+    @staticmethod
+    def _payload_config(tmpdir):
+        """Write a twins payload under a temp data dir and return a config."""
+        explorer = Path(tmpdir) / "explorer"
+        explorer.mkdir(parents=True, exist_ok=True)
+        (explorer / "dash_twins_payload.json").write_text(json.dumps({"points": []}))
+        return SimpleNamespace(data_dir=str(tmpdir))
+
+    @staticmethod
+    def _drain(response):
+        """Consume a streaming response without closing this test's connection.
+
+        The test client wires ``response.close`` into the streaming iterator,
+        and that close fires ``request_finished`` -> ``close_old_connections``,
+        which would tear down the connection the test's transaction runs in and
+        break every test after it. Django disconnects that receiver around
+        ``close()`` for non-streaming responses; do the same here.
+
+        Args:
+            response: The streaming response to consume.
+
+        Returns:
+            bytes: The response body.
+        """
+        request_finished.disconnect(close_old_connections)
+        try:
+            return b"".join(response.streaming_content)
+        finally:
+            request_finished.connect(close_old_connections)
+
+    # --- twins_search: authorized from the CLASSIFIED model ---
+
+    def test_twins_search_refused_after_a_transformer_classification(self):
+        """AE6: refused even though a stale embedding sits in the session."""
+        self._session(selected="transformer", classified="transformer", embedding=True)
+        svc = MagicMock()
+        with patch("astrodash.ui_views.get_twins_search_service", return_value=svc):
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 403)
+        svc.find_twins.assert_not_called()
+
+    def test_twins_search_served_after_a_dash_classification(self):
+        self._session(selected="dash", classified="dash", embedding=True)
+        svc = MagicMock(
+            find_twins=MagicMock(
+                return_value={
+                    "query_umap": [0.0, 0.0],
+                    "twin_indices": [1],
+                    "twin_similarities": [0.9],
+                }
+            )
+        )
+        with patch("astrodash.ui_views.get_twins_search_service", return_value=svc):
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["twin_indices"], [1])
+
+    # --- twins page and data: authorized from the SELECTED model ---
+
+    def test_dash_selection_reaches_both_twins_routes_before_any_classification(self):
+        """R21: the pre-classification twins pane keeps working exactly as today."""
+        self._session(selected="dash")
+        page = self.client.get(reverse("astrodash:dash_twins"))
+        self.assertEqual(page.status_code, 200)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "astrodash.ui_views.get_config",
+                return_value=self._payload_config(tmpdir),
+            ):
+                data = self.client.get(reverse("astrodash:dash_twins_data"))
+                self.assertEqual(data.status_code, 200)
+                self.assertEqual(json.loads(self._drain(data)), {"points": []})
+
+    def test_transformer_selection_is_refused_both_twins_routes(self):
+        self._session(selected="transformer")
+        self.assertEqual(
+            self.client.get(reverse("astrodash:dash_twins")).status_code, 403
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "astrodash.ui_views.get_config",
+                return_value=self._payload_config(tmpdir),
+            ):
+                resp = self.client.get(reverse("astrodash:dash_twins_data"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_twins_page_is_not_gated_on_the_classified_model(self):
+        """KTD5: a DASH selection whose last run was Transformer still browses.
+
+        The page carries no classification artifact, so the classified model
+        must not decide it -- only the selection does.
+        """
+        self._session(selected="dash", classified="transformer")
+        self.assertEqual(
+            self.client.get(reverse("astrodash:dash_twins")).status_code, 200
+        )

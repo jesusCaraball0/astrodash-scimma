@@ -35,7 +35,7 @@ class DefinitionFieldsTests(SimpleTestCase):
         dash = registry.get_definition("dash")
         self.assertIsNotNone(dash)
         self.assertEqual(dash.redshift_input, registry.REDSHIFT_INPUT_OPTIONAL)
-        self.assertTrue(dash.supports_twins)
+        self.assertIn(registry.SURFACE_DASH_TWINS, dash.surfaces)
         self.assertTrue(dash.supports_redshift_estimation)
         self.assertTrue(dash.supports_template_overlays)
         self.assertTrue(dash.supports_rlap)
@@ -47,7 +47,7 @@ class DefinitionFieldsTests(SimpleTestCase):
         tr = registry.get_definition("transformer")
         self.assertIsNotNone(tr)
         self.assertEqual(tr.redshift_input, registry.REDSHIFT_INPUT_REQUIRED)
-        self.assertFalse(tr.supports_twins)
+        self.assertNotIn(registry.SURFACE_DASH_TWINS, tr.surfaces)
         self.assertFalse(tr.supports_redshift_estimation)
         self.assertFalse(tr.supports_template_overlays)
         self.assertFalse(tr.supports_rlap)
@@ -238,34 +238,31 @@ class SurfaceDeclarationTests(SimpleTestCase):
             ["Classification"],
         )
 
-    def test_derived_twins_property_agrees_with_the_declared_list(self):
-        for model_id, declares_twins in (("dash", True), ("transformer", False)):
-            with self.subTest(model=model_id):
-                definition = registry.get_definition(model_id)
-                self.assertEqual(definition.supports_twins, declares_twins)
-                self.assertEqual(
-                    registry.SURFACE_DASH_TWINS in definition.surfaces,
-                    declares_twins,
-                )
-
     def test_declared_list_is_the_sole_authority_for_twins(self):
-        """R31: flipping the declared list flips the derived twins answer."""
+        """R31: the declared list is the only place twins is answered.
+
+        The transitional ``supports_twins`` property is gone (KTD12: U5 owned
+        its read site and deleted it), so membership in ``surfaces`` is the
+        whole answer -- and flipping the list flips it.
+        """
+        self.assertFalse(hasattr(registry.get_definition("dash"), "supports_twins"))
+
         transformer = registry.get_definition("transformer")
         gains_twins = replace(
             transformer,
             surfaces=(registry.SURFACE_CLASSIFICATION, registry.SURFACE_DASH_TWINS),
         )
-        self.assertTrue(gains_twins.supports_twins)
+        self.assertIn(registry.SURFACE_DASH_TWINS, gains_twins.surfaces)
 
         dash = registry.get_definition("dash")
         loses_twins = replace(dash, surfaces=(registry.SURFACE_CLASSIFICATION,))
-        self.assertFalse(loses_twins.supports_twins)
+        self.assertNotIn(registry.SURFACE_DASH_TWINS, loses_twins.surfaces)
 
     def test_capability_booleans_are_independent_of_the_surface_list(self):
         """R30/KTD11: overlay, RLap, and redshift-estimation stay booleans."""
         dash = registry.get_definition("dash")
         no_twins_surface = replace(dash, surfaces=(registry.SURFACE_CLASSIFICATION,))
-        self.assertFalse(no_twins_surface.supports_twins)
+        self.assertNotIn(registry.SURFACE_DASH_TWINS, no_twins_surface.surfaces)
         self.assertTrue(no_twins_surface.supports_redshift_estimation)
         self.assertTrue(no_twins_surface.supports_template_overlays)
         self.assertTrue(no_twins_surface.supports_rlap)
