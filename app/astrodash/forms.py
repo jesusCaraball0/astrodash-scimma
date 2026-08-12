@@ -137,10 +137,28 @@ class ClassifyForm(forms.Form):
         widget=forms.NumberInput(attrs={'class': 'form-control', 'step': 'any'})
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, effective_model=None, **kwargs):
+        """Build the form, optionally bound to the model that will actually run.
+
+        Args:
+            *args: Standard form positional arguments (data, files).
+            effective_model: The model the view will run -- the scoped model in
+                a scoped session, otherwise the session's selection. It becomes
+                the field's initial value, it is added to the choices when the
+                registry knows it (a gated model is unlisted, so it is in no
+                listed choice set, and a scoped submission would otherwise fail
+                validation before the view consulted the scope), and it decides
+                the redshift policy this form validates against.
+            **kwargs: Standard form keyword arguments.
+        """
         super().__init__(*args, **kwargs)
-        self.fields['model'].choices = _classify_model_choices()
-        self.fields['model'].initial = default_definition().id
+        self.effective_model = effective_model
+        choices = _classify_model_choices()
+        definition = get_definition(effective_model) if effective_model else None
+        if definition is not None and definition.id not in [c[0] for c in choices]:
+            choices.append((definition.id, definition.title))
+        self.fields['model'].choices = choices
+        self.fields['model'].initial = effective_model or default_definition().id
 
     def clean(self):
         cleaned_data = super().clean()
@@ -148,7 +166,9 @@ class ClassifyForm(forms.Form):
         supernova_name = cleaned_data.get('supernova_name')
         known_z = cleaned_data.get('known_z')
         redshift = cleaned_data.get('redshift')
-        model = cleaned_data.get('model')
+        # The redshift policy follows the model that will actually run, not the
+        # submitted field: inside a scoped flow the field is not authoritative.
+        model = self.effective_model or cleaned_data.get('model')
 
         if not file and not supernova_name:
             raise forms.ValidationError("Please provide either a spectrum file or a Supernova Name.")

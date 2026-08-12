@@ -32,9 +32,14 @@ Three properties are load-bearing and each is easy to get subtly wrong:
 import hmac
 import time
 from dataclasses import dataclass
+from functools import wraps
 from typing import Optional
 
+from django.contrib import messages
 from django.core import signing
+from django.http import HttpResponseRedirect, JsonResponse
+from django.shortcuts import render
+from django.urls import reverse
 
 from astrodash.core.gate_config import (
     CREDENTIAL_ENV_VAR,
@@ -42,6 +47,8 @@ from astrodash.core.gate_config import (
     SIGNING_KEY_NAME,
     gate_configuration,
 )
+from astrodash.infrastructure.ml.model_registry import get_definition
+from astrodash.surfaces import offers_route
 
 # Salt distinct to this purpose, so a token minted here cannot be replayed
 # against any other signed value the project produces.
@@ -307,3 +314,177 @@ def live_scope_model_id(session) -> Optional[str]:
     if scope_expired(session):
         return None
     return scope_model_id(session)
+
+
+def effective_model_id(session) -> Optional[str]:
+    """Return the model a request will actually run.
+
+    The scope wins over a session selection (KTD10): a scoped visitor runs the
+    scoped model whatever else the session -- or the submitted form -- says.
+
+    Args:
+        session: The request's session.
+
+    Returns:
+        The scoped model id while a live scope exists, otherwise the session's
+        model selection, otherwise ``None``.
+    """
+    return live_scope_model_id(session) or session.get("selected_model_type")
+
+
+# Copy for the two page-level refusals. The lapse case may name that the window
+# ended, because its visitor already knows which model they were using; the cold
+# case must not, because its visitor may not.
+SCOPE_LAPSED_HEADING = "This review window has ended"
+SCOPE_LAPSED_MESSAGE = (
+    "The access link that opened this session has expired, so the session has "
+    "ended and everything it produced has been discarded. If you still need "
+    "access, ask whoever sent you the link for a new one."
+)
+
+# Refusal shown when a surface is requested for a model that does not declare
+# it. Unchanged from the guard this decorator absorbed.
+SURFACE_NOT_OFFERED_MESSAGE = "This result surface is not offered for this model."
+
+# Refusal shown when a gated model is reached without a scope: it is reachable
+# only through an entry link, so the visitor is returned to the public picker.
+GATED_WITHOUT_SCOPE_MESSAGE = (
+    "That model is not available. Please choose a model to continue."
+)
+
+
+# Why a guarded request was refused. The gate evaluates in a fixed order --
+# deadline, scope present, model selectable, surface declared -- because the
+# order decides what a refused visitor learns.
+REFUSED_SCOPE_LAPSED = "scope_lapsed"
+REFUSED_GATED_WITHOUT_SCOPE = "gated_without_scope"
+REFUSED_SURFACE_NOT_OFFERED = "surface_not_offered"
+
+
+def _refusal_for(request, reason, as_json):
+    """Build the response for a refused request.
+
+    Args:
+        request: The current request.
+        reason: One of the ``REFUSED_*`` reasons.
+        as_json: Whether the caller is a JSON route.
+
+    Returns:
+        HttpResponse: The refusal.
+    """
+    if reason == REFUSED_SCOPE_LAPSED:
+        if as_json:
+            return JsonResponse({"error": SCOPE_LAPSED_MESSAGE}, status=403)
+        return render(
+            request,
+            "astrodash/model_gate_refused.html",
+            {
+                "refusal_heading": SCOPE_LAPSED_HEADING,
+                "refusal_message": SCOPE_LAPSED_MESSAGE,
+            },
+            status=403,
+        )
+
+    if reason == REFUSED_GATED_WITHOUT_SCOPE:
+        if as_json:
+            return JsonResponse({"error": SURFACE_NOT_OFFERED_MESSAGE}, status=403)
+        if request.path == reverse("astrodash:classify"):
+            # The classification page is the one an ordinary visitor can land on
+            # with a stale selection, so it is returned to the picker rather
+            # than shown an error page.
+            messages.error(request, GATED_WITHOUT_SCOPE_MESSAGE)
+            return HttpResponseRedirect(
+                reverse("astrodash:model_selection") + "?action=classify"
+            )
+        return render(
+            request,
+            "astrodash/model_gate_refused.html",
+            {"refusal_heading": None, "refusal_message": None},
+            status=403,
+        )
+
+    if as_json:
+        return JsonResponse({"error": SURFACE_NOT_OFFERED_MESSAGE}, status=403)
+    return render(
+        request,
+        "astrodash/model_gate_refused.html",
+        {
+            "refusal_heading": "This view is not available",
+            "refusal_message": SURFACE_NOT_OFFERED_MESSAGE,
+        },
+        status=403,
+    )
+
+
+def evaluate_access(session, model_id, route_name):
+    """Decide whether a guarded request may proceed.
+
+    Checks run in a fixed order -- deadline, then scope presence, then whether
+    the model is reachable at all, then whether it declares the surface -- so a
+    refusal cannot leak by ordering.
+
+    Args:
+        session: The request's session. A lapsed scope is torn down here, so
+            nothing it produced stays reachable.
+        model_id: The model that authorizes this request (see
+            :func:`astrodash.surfaces.declared_surfaces`).
+        route_name: The supporting route's name, or ``None`` for the
+            classification view itself, which owns no supporting route.
+
+    Returns:
+        One of the ``REFUSED_*`` reasons, or ``None`` when the request may
+        proceed.
+    """
+    if scope_model_id(session) and scope_expired(session):
+        end_scope(session)
+        return REFUSED_SCOPE_LAPSED
+
+    if live_scope_model_id(session) is None:
+        definition = get_definition(model_id) if model_id else None
+        if definition is not None and definition.requires_credential:
+            return REFUSED_GATED_WITHOUT_SCOPE
+
+    if route_name and not offers_route(model_id, route_name):
+        return REFUSED_SURFACE_NOT_OFFERED
+
+    return None
+
+
+def model_access_required(route_name=None, *, from_classified=False, as_json=False):
+    """Guard a view that can run a model, consulting the scope on every request.
+
+    A decorator rather than middleware (KTD1): the only hand-rolled gate this
+    codebase has is the interim API-writes decorator, there is no
+    project-authored Django middleware at all, and Django reserves middleware
+    for whole-app defaults. Because a decorator is opt-in by nature, a guard
+    test walks every route the surface map declares and asserts this is applied.
+
+    Args:
+        route_name: The name of the supporting route being guarded, or ``None``
+            for the classification view itself.
+        from_classified: Whether the route authorizes from the *classified*
+            model rather than the selected one (KTD5). True only for a route
+            that consumes a classification artifact; a route serving a
+            model-agnostic payload authorizes from the selection, so it stays
+            browsable before any classification, exactly as today.
+        as_json: Whether refusals should be JSON rather than a rendered page.
+
+    Returns:
+        The view decorator.
+    """
+
+    def decorate(view_func):
+        @wraps(view_func)
+        def wrapper(request, *args, **kwargs):
+            if from_classified:
+                model_id = request.session.get("classify_model_type")
+            else:
+                model_id = effective_model_id(request.session)
+            reason = evaluate_access(request.session, model_id, route_name)
+            if reason is not None:
+                return _refusal_for(request, reason, as_json)
+            return view_func(request, *args, **kwargs)
+
+        return wrapper
+
+    return decorate

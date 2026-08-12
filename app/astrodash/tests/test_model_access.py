@@ -21,9 +21,11 @@ import re
 from contextlib import contextmanager
 from dataclasses import replace
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
+from django.http import HttpResponse
 from django.test import TestCase
 from django.urls import reverse
 
@@ -106,6 +108,65 @@ def gated_gate(model_id="dash", **config):
 def gate_url(token):
     """Return the entry-link path carrying a token."""
     return reverse("astrodash:model_gate", args=[token])
+
+
+def classify_post(model):
+    """Return a valid classify-form payload naming a model.
+
+    Args:
+        model: The value to put in the form's model field. Inside a scoped
+            flow this is exactly the field an attacker would alter, so tests
+            vary it independently of the scope.
+
+    Returns:
+        dict: The POST data.
+    """
+    return {
+        "supernova_name": "SN2011fe",
+        "model": model,
+        "smoothing": 0,
+        "min_wave": 3500,
+        "max_wave": 10000,
+    }
+
+
+@contextmanager
+def mocked_classification(model_type):
+    """Run the classify view without model weights or network access.
+
+    Args:
+        model_type: The model the mocked classification reports having run.
+
+    Yields:
+        The mocked classification service, so a test can read back which model
+        the view actually asked it to run.
+    """
+    processed = MagicMock()
+    processed.x = [3000.0, 5000.0, 9000.0]
+    processed.y = [1.0, 2.0, 1.0]
+
+    classification = MagicMock()
+    classification.model_type = model_type
+    classification.results = {"best_matches": [], "embedding": [0.0] * 1024}
+
+    classification_svc = MagicMock(
+        classify_spectrum=AsyncMock(return_value=classification)
+    )
+    with patch(
+        "astrodash.ui_views.get_spectrum_service",
+        return_value=MagicMock(get_spectrum_data=AsyncMock(return_value=MagicMock())),
+    ), patch(
+        "astrodash.ui_views.get_spectrum_processing_service",
+        return_value=MagicMock(
+            process_spectrum_with_params=AsyncMock(return_value=processed)
+        ),
+    ), patch(
+        "astrodash.ui_views.get_classification_service",
+        return_value=classification_svc,
+    ), patch(
+        "astrodash.ui_views.render", return_value=HttpResponse(b"")
+    ):
+        yield classification_svc
 
 
 class EntryLinkTokenTests(TestCase):
@@ -348,6 +409,197 @@ class ScopeDeadlineTests(TestCase):
                 self.client.get(reverse("astrodash:classify"))
         self.assertEqual(self.client.session[model_access.SCOPE_DEADLINE_KEY], granted)
         self.assertEqual(granted, 1000.0 + 3600)
+
+
+class ScopeEnforcementTests(TestCase):
+    """R9/R11/R12: every surface that can run a gated model consults the scope."""
+
+    SCOPED_CONTROL_MARKER = 'id="scoped-model-name"'
+
+    def _redeem(self, now=1000.0, ttl_seconds="3600", seed=None):
+        """Establish a scope by redeeming a fresh link.
+
+        Args:
+            now: The POSIX timestamp to mint and redeem at.
+            ttl_seconds: The configured window.
+            seed: Optional session state to seed before redeeming.
+
+        Returns:
+            The absolute deadline the scope was granted with.
+        """
+        if seed:
+            session = self.client.session
+            session.update(seed)
+            session.save()
+        with gated_gate(ttl_seconds=ttl_seconds), patch.object(
+            model_access, "_now", return_value=now
+        ):
+            token = model_access.mint_entry_link("dash")
+            resp = self.client.post(
+                gate_url(token), data={"credential": GATE_CREDENTIAL}
+            )
+        self.assertEqual(resp.status_code, 302)
+        return self.client.session[model_access.SCOPE_DEADLINE_KEY]
+
+    def _seed_selection(self, **extra):
+        session = self.client.session
+        session["selected_model_type"] = "dash"
+        session.update(extra)
+        session.save()
+
+    # --- refused without a scope ---
+
+    def test_gated_classification_view_is_refused_without_a_scope(self):
+        self._seed_selection()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(
+            resp["Location"].startswith(reverse("astrodash:model_selection")),
+            resp["Location"],
+        )
+
+    def test_gated_surface_page_route_is_refused_without_a_scope(self):
+        self._seed_selection()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            resp = self.client.get(reverse("astrodash:dash_twins"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_gated_surface_data_route_is_refused_without_a_scope(self):
+        self._seed_selection()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            resp = self.client.get(reverse("astrodash:dash_twins_data"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_gated_surface_search_route_is_refused_without_a_scope(self):
+        self._seed_selection(
+            classify_model_type="dash", classify_dash_embedding=[0.0] * 1024
+        )
+        with gated_gate(), patch.object(model_access, "_now", return_value=1000.0):
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 403)
+
+    # --- the model control in a scoped session ---
+
+    def test_scoped_session_renders_the_model_control_disabled_and_named(self):
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        body = resp.content.decode()
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(self.SCOPED_CONTROL_MARKER, body)
+        control = re.search(r"<input[^>]*id=\"scoped-model-name\"[^>]*>", body).group(0)
+        self.assertIn("disabled", control)
+        self.assertIn(model_registry.get_definition("dash").title, control)
+        # The dropdown is not offered alongside it.
+        self.assertNotIn('id="id_model"', body)
+
+    # --- the model that actually runs ---
+
+    def test_scoped_submission_validates_though_the_model_is_unlisted(self):
+        """A gated model is unlisted, so its id is in no listed choice set."""
+        self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), mocked_classification("dash") as classification_svc:
+            self.client.post(reverse("astrodash:classify"), data=classify_post("dash"))
+        self.assertEqual(
+            classification_svc.classify_spectrum.await_args.kwargs["model_type"], "dash"
+        )
+
+    def test_altered_request_still_runs_the_scoped_model(self):
+        """AE3: the request cannot be moved to another model."""
+        self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), mocked_classification("dash") as classification_svc:
+            self.client.post(
+                reverse("astrodash:classify"), data=classify_post("transformer")
+            )
+        self.assertEqual(
+            classification_svc.classify_spectrum.await_args.kwargs["model_type"], "dash"
+        )
+
+    def test_prior_uploaded_selection_does_not_survive_into_the_scope(self):
+        """AE15: a stale selection cannot displace the scope."""
+        self._redeem(
+            seed={"selected_model_type": "user_uploaded", "selected_model_id": "um-1"}
+        )
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=1001.0
+        ), mocked_classification("dash") as classification_svc:
+            self.client.post(reverse("astrodash:classify"), data=classify_post("dash"))
+        kwargs = classification_svc.classify_spectrum.await_args.kwargs
+        self.assertEqual(kwargs["model_type"], "dash")
+        self.assertIsNone(kwargs["user_model_id"])
+
+    # --- the deadline is a lifetime, not an idle timeout ---
+
+    def test_continuous_classification_still_loses_access_at_the_deadline(self):
+        """AE10: activity must not extend the deadline."""
+        deadline = self._redeem(now=1000.0, ttl_seconds="3600")
+        for tick in (1001.0, 2000.0, 3000.0, 4000.0):
+            with gated_gate(), patch.object(
+                model_access, "_now", return_value=tick
+            ), mocked_classification("dash"):
+                resp = self.client.post(
+                    reverse("astrodash:classify"), data=classify_post("dash")
+                )
+            self.assertEqual(resp.status_code, 200, f"refused early at {tick}")
+            self.assertEqual(
+                self.client.session[model_access.SCOPE_DEADLINE_KEY], deadline
+            )
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=deadline + 1
+        ):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn(CredentialPromptTests.REFUSAL_MARKER, resp.content.decode())
+        self.assertNotIn(model_access.SCOPE_MODEL_KEY, self.client.session)
+
+    def test_lapsed_scope_refusal_names_no_model(self):
+        deadline = self._redeem()
+        with gated_gate(), patch.object(
+            model_access, "_now", return_value=deadline + 1
+        ):
+            resp = self.client.get(reverse("astrodash:classify"))
+        body = resp.content.decode()
+        self.assertNotIn("dash", body.lower().replace("astrodash", ""))
+
+    def test_scope_survives_django_login_with_its_deadline_intact(self):
+        deadline = self._redeem()
+        user = get_user_model().objects.create_user(
+            username="reviewer", password="not-the-gate-credential"
+        )
+        self.client.force_login(user)
+        session = self.client.session
+        self.assertEqual(session[model_access.SCOPE_MODEL_KEY], "dash")
+        self.assertEqual(session[model_access.SCOPE_DEADLINE_KEY], deadline)
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 200)
+
+
+class UngatedFlowUnaffectedTests(TestCase):
+    """R21: with no gated model anywhere, nothing about the gate is visible."""
+
+    def test_public_classify_page_still_renders_the_model_dropdown(self):
+        session = self.client.session
+        session["selected_model_type"] = "dash"
+        session.save()
+        resp = self.client.get(reverse("astrodash:classify"))
+        body = resp.content.decode()
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('id="id_model"', body)
+        self.assertNotIn(ScopeEnforcementTests.SCOPED_CONTROL_MARKER, body)
+
+    def test_public_twins_routes_still_served_for_dash(self):
+        session = self.client.session
+        session["selected_model_type"] = "dash"
+        session.save()
+        self.assertEqual(
+            self.client.get(reverse("astrodash:dash_twins")).status_code, 200
+        )
 
 
 class MintCommandTests(TestCase):

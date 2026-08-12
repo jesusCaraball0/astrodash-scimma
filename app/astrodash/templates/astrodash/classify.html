@@ -51,7 +51,18 @@
                     <form method="post" enctype="multipart/form-data">
                         {% csrf_token %}
 
-                        {% if selected_model_display %}
+                        {% if scoped_model_display %}
+                        {# A scoped session runs one model and cannot be moved
+                           to another, so the control is disabled and named.
+                           The hidden input keeps the field posted; the view
+                           takes the model from the scope regardless. #}
+                        <input type="hidden" name="model" value="{{ scoped_model_type }}">
+                        <div class="form-group">
+                            <label class="form-label" for="scoped-model-name">Model</label>
+                            <input type="text" class="form-control font-weight-bold" id="scoped-model-name" value="{{ scoped_model_display }}" disabled>
+                            <p class="small text-muted mt-2">This session is limited to this model.</p>
+                        </div>
+                        {% elif selected_model_display %}
                         <input type="hidden" name="model" value="user_uploaded">
                         <div class="form-group">
                             <label class="form-label">Model</label>

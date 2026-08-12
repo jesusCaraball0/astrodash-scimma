@@ -26,6 +26,7 @@ from typing import Dict, FrozenSet, Optional, Sequence, Tuple
 from astrodash.infrastructure.ml.model_registry import (
     SURFACE_CLASSIFICATION,
     SURFACE_DASH_TWINS,
+    get_definition,
 )
 
 
@@ -79,6 +80,47 @@ SURFACES: Dict[str, Surface] = {
         routes=("dash_twins", "dash_twins_data", "twins_search"),
     ),
 }
+
+
+# A model the registry cannot resolve -- a user-uploaded model -- offers the
+# classification surface alone (KTD10). It never renders zero tabs.
+FALLBACK_SURFACE_IDS: Tuple[str, ...] = (SURFACE_CLASSIFICATION,)
+
+
+def declared_surfaces(model_type: Optional[str]) -> Tuple["Surface", ...]:
+    """Resolve the result surfaces a model declares, in declared order.
+
+    Args:
+        model_type: A model id as held in the session -- the *selected* model
+            for a surface the visitor merely browses, the *classified* model
+            for a surface reading a classification artifact (KTD5). May be
+            ``None`` or a value the registry cannot resolve.
+
+    Returns:
+        The declared :class:`Surface` entries, the first of which is the
+        default tab.
+    """
+    definition = get_definition(model_type) if model_type else None
+    surface_ids = (
+        definition.surfaces if definition is not None else FALLBACK_SURFACE_IDS
+    )
+    return resolve_surfaces(surface_ids)
+
+
+def offers_route(model_type: Optional[str], route_name: str) -> bool:
+    """Whether a model's declared surfaces own the given supporting route.
+
+    Args:
+        model_type: The model id that authorizes the route (see
+            :func:`declared_surfaces` for which one that is).
+        route_name: The route's name in the ``astrodash`` URL namespace.
+
+    Returns:
+        True when some declared surface lists the route as its own.
+    """
+    return any(
+        route_name in surface.routes for surface in declared_surfaces(model_type)
+    )
 
 
 def known_surface_ids() -> FrozenSet[str]:

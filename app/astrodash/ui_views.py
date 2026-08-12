@@ -2,7 +2,6 @@ from django.shortcuts import render
 from django.contrib import messages
 from django.http import (
     HttpResponseRedirect,
-    HttpResponseForbidden,
     FileResponse,
     Http404,
     JsonResponse,
@@ -22,7 +21,6 @@ from astrodash.forms import (
 )
 from astrodash.infrastructure.ml.model_registry import (
     REDSHIFT_INPUT_REQUIRED,
-    SURFACE_CLASSIFICATION,
     SURFACE_DASH_TWINS,
     get_definition,
     listed_definitions,
@@ -32,9 +30,11 @@ from astrodash.core.model_access import (
     begin_scope,
     credential_matches,
     end_scope,
+    live_scope_model_id,
+    model_access_required,
     redeem_entry_link,
 )
-from astrodash.surfaces import resolve_surfaces
+from astrodash.surfaces import declared_surfaces
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -143,50 +143,8 @@ def team_members(request):
     )
 
 
-# A model the registry cannot resolve -- a user-uploaded model -- offers the
-# classification surface alone (KTD10). It never renders zero tabs.
-FALLBACK_SURFACE_IDS = (SURFACE_CLASSIFICATION,)
-
-SURFACE_NOT_OFFERED_MESSAGE = "This result surface is not offered for this model."
-
-
-def _declared_surfaces(model_type):
-    """Resolve the result surfaces a model declares, in declared order.
-
-    Args:
-        model_type: A model id as held in the session -- the *selected* model
-            for a surface the visitor merely browses, the *classified* model
-            for a surface reading a classification artifact (KTD5). May be
-            ``None`` or a value the registry cannot resolve.
-
-    Returns:
-        tuple: The declared :class:`~astrodash.surfaces.Surface` entries, the
-        first of which is the default tab.
-    """
-    definition = get_definition(model_type) if model_type else None
-    surface_ids = (
-        definition.surfaces if definition is not None else FALLBACK_SURFACE_IDS
-    )
-    return resolve_surfaces(surface_ids)
-
-
-def _offers_route(model_type, route_name):
-    """Whether a model's declared surfaces own the given supporting route.
-
-    Args:
-        model_type: The model id that authorizes the route (see
-            :func:`_declared_surfaces` for which one that is).
-        route_name: The route's name in the ``astrodash`` URL namespace.
-
-    Returns:
-        bool: True when some declared surface lists the route as its own.
-    """
-    return any(
-        route_name in surface.routes for surface in _declared_surfaces(model_type)
-    )
-
-
 @xframe_options_sameorigin
+@model_access_required("dash_twins")
 def dash_twins(request):
     """
     Renders the DASH Twins Explorer (embedding visualization).
@@ -196,11 +154,10 @@ def dash_twins(request):
     model-agnostic global payload and reads no classification artifact, so it
     stays browsable before any classification has run, exactly as today.
     """
-    if not _offers_route(request.session.get("selected_model_type"), "dash_twins"):
-        return HttpResponseForbidden(SURFACE_NOT_OFFERED_MESSAGE)
     return render(request, "astrodash/explorer/dash_twins.html")
 
 
+@model_access_required("dash_twins_data", as_json=True)
 def dash_twins_data(request):
     """
     Serves the DASH Twins payload JSON from {data_dir}/explorer (same as models, templates).
@@ -209,8 +166,6 @@ def dash_twins_data(request):
     Authorized from the *selected* model, for the same reason as the page it
     feeds: the payload is global and carries nothing from a classification.
     """
-    if not _offers_route(request.session.get("selected_model_type"), "dash_twins_data"):
-        return JsonResponse({"error": SURFACE_NOT_OFFERED_MESSAGE}, status=403)
     path = Path(get_config().data_dir) / "explorer" / "dash_twins_payload.json"
     if not path.is_file():
         raise Http404("DASH Twins data not found. Run extract_payload.py --build-artifacts "
@@ -222,6 +177,7 @@ def dash_twins_data(request):
     )
 
 
+@model_access_required("twins_search", from_classified=True, as_json=True)
 def twins_search(request):
     """
     POST or GET: run twins search using the DASH embedding stored in session
@@ -232,8 +188,6 @@ def twins_search(request):
     route that consumes a classification artifact (the stashed embedding), so
     the model that produced that artifact decides whether it may be searched.
     """
-    if not _offers_route(request.session.get('classify_model_type'), 'twins_search'):
-        return JsonResponse({'error': SURFACE_NOT_OFFERED_MESSAGE}, status=403)
     import numpy as np
     embedding = request.session.get('classify_dash_embedding')
     if not embedding or not isinstance(embedding, list) or len(embedding) != 1024:
@@ -552,14 +506,48 @@ def model_selection(request):
     return render(request, 'astrodash/model_selection.html', context)
 
 
+def _build_classify_form(effective_model, data=None, files=None, initial=None):
+    """Build the classification form bound to the model that will actually run.
+
+    The effective model drives both the form's choices and its redshift policy
+    (KTD10). Without it the two disagree in a scoped session: a gated model is
+    unlisted, so its id is in no listed choice set, and the submission would
+    fail validation before the view ever consulted the scope.
+
+    Args:
+        effective_model: The model that will run -- the scoped model when a
+            scope is live, otherwise the session's selection.
+        data: Bound POST data, or ``None`` for an unbound form.
+        files: Bound files, or ``None``.
+        initial: Initial field values, or ``None``.
+
+    Returns:
+        ClassifyForm: The form, with the user-uploaded entry hidden from the
+        dropdown unless it is what was selected (it travels as a hidden input).
+    """
+    form = ClassifyForm(data, files, initial=initial, effective_model=effective_model)
+    if effective_model != 'user_uploaded':
+        form.fields['model'].choices = [
+            c for c in form.fields['model'].choices if c[0] != 'user_uploaded'
+        ]
+    return form
+
+
+@model_access_required()
 def classify(request):
     """
     Handles spectrum classification via the UI.
     """
-    # Get model selection from session (set by model_selection view)
+    # The model that will actually run: the scope first, then the session's
+    # selection (KTD10). Inside a scope the selection cannot influence which
+    # model executes, so a stale user-model id is dropped with it.
+    scoped_model_type = live_scope_model_id(request.session)
     selected_model_type = request.session.get('selected_model_type')
     selected_model_id = request.session.get('selected_model_id') or None
     if selected_model_id == '':
+        selected_model_id = None
+    if scoped_model_type is not None:
+        selected_model_type = scoped_model_type
         selected_model_id = None
 
     # If no model selected, redirect to model selection
@@ -596,16 +584,7 @@ def classify(request):
                 # If cached file restore fails, continue with original request files.
                 form_files = request.FILES or None
 
-    form = ClassifyForm(request.POST or None, form_files)
-    # Set the model from session (for validation and display)
-    form.fields['model'].initial = (
-        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
-    )
-    # When showing the dropdown, only offer dash/transformer; user_uploaded is sent via hidden input
-    if selected_model_type != 'user_uploaded':
-        form.fields['model'].choices = [
-            c for c in form.fields['model'].choices if c[0] != 'user_uploaded'
-        ]
+    form = _build_classify_form(selected_model_type, request.POST or None, form_files)
     # Display label for "Model Used" when a user model is selected
     selected_model_display = None
     if selected_model_type == 'user_uploaded' and selected_model_id:
@@ -615,15 +594,25 @@ def classify(request):
             selected_model_display = (um.name or "").strip() or selected_model_id
         except Exception:
             selected_model_display = "User uploaded model"
+    # In a scoped session the model control is not a choice: it renders
+    # disabled, naming the one model the scope allows.
+    scoped_model_display = None
+    if scoped_model_type is not None:
+        scoped_definition = get_definition(scoped_model_type)
+        scoped_model_display = (
+            scoped_definition.title if scoped_definition else scoped_model_type
+        )
     # Result surfaces (the tab strip and its panes) come from the *selected*
     # model's declared list per KTD5, so a fresh page load already shows every
     # tab the chosen model offers, before any classification has run.
-    result_surfaces = _declared_surfaces(selected_model_type)
+    result_surfaces = declared_surfaces(selected_model_type)
     context = {
         'form': form,
         'selected_model_type': selected_model_type,
         'selected_model_id': selected_model_id,
         'selected_model_display': selected_model_display,
+        'scoped_model_type': scoped_model_type,
+        'scoped_model_display': scoped_model_display,
         'result_surfaces': result_surfaces,
         'result_surface_ids': tuple(surface.id for surface in result_surfaces),
         # Whether the model that will actually run takes a redshift as an input;
@@ -709,15 +698,9 @@ def classify(request):
                 })
                 last_params = request.session.get('classify_last_params') or {}
                 if last_params:
-                    overlay_form = ClassifyForm(initial=last_params)
-                    overlay_form.fields['model'].initial = (
-                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
+                    context['form'] = _build_classify_form(
+                        selected_model_type, initial=last_params
                     )
-                    if selected_model_type != 'user_uploaded':
-                        overlay_form.fields['model'].choices = [
-                            c for c in overlay_form.fields['model'].choices if c[0] != 'user_uploaded'
-                        ]
-                    context['form'] = overlay_form
                 return render(request, 'astrodash/classify.html', context)
             # Fall through to normal render if no overlays or restore failed
 
@@ -916,17 +899,12 @@ def classify(request):
                     'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
                 })
                 if source_changed:
-                    replacement_form = ClassifyForm(
-                        initial={'supernova_name': supernova_name} if supernova_name else None
+                    context['form'] = _build_classify_form(
+                        selected_model_type,
+                        initial=(
+                            {'supernova_name': supernova_name} if supernova_name else None
+                        ),
                     )
-                    replacement_form.fields['model'].initial = (
-                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
-                    )
-                    if selected_model_type != 'user_uploaded':
-                        replacement_form.fields['model'].choices = [
-                            c for c in replacement_form.fields['model'].choices if c[0] != 'user_uploaded'
-                        ]
-                    context['form'] = replacement_form
 
             except AppException as e:
                 messages.error(request, f"Processing Error: {e.message}")
