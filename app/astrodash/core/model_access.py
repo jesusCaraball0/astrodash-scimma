@@ -594,6 +594,12 @@ def model_access_required(route_name=None, *, from_classified=False, as_json=Fal
                 return _refusal_for(request, reason, as_json)
             return view_func(request, *args, **kwargs)
 
+        # Marker the coverage guard reads. A decorator is opt-in by nature, so a
+        # surface added later could silently omit the gate; the guard walks every
+        # route the surface map declares and asserts this attribute is present.
+        # ``functools.wraps`` copies it outward, so an additional decorator
+        # stacked above this one does not hide it.
+        wrapper.model_access_guarded = True
         return wrapper
 
     return decorate

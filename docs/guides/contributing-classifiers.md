@@ -21,9 +21,42 @@ This section explains how to add a first-class model kind (e.g., like `dash` or 
 #### 1. Register the model in the model registry
 
 - Directory: `app/astrodash/infrastructure/ml/model_registry/`
-- Create `definitions/<your_model>.py` defining a `ModelDefinition`: its `id` is the `model_type`, plus its UI card fields (title, description, color, feature tags, icon, recommended), lifecycle `status`, `is_default`, the capability/requirement flags (`requires_redshift`, `preprocessing`, `supports_twins`, `supports_redshift_estimation`, `supports_template_overlays`, `supports_rlap`), and a reference to your classifier class (see step 2). Copy `definitions/dash.py` or `definitions/transformer.py` as a template.
+- Create `definitions/<your_model>.py` defining a `ModelDefinition`. Copy `definitions/dash.py` or `definitions/transformer.py` as a template. A definition declares four separable things:
+
+  1. **Identity and presentation.** `id` (which is the `model_type`), the UI card fields (title, description, color, feature tags, icon, recommended), and `preprocessing`.
+  2. **Public surface.** `status` (`active` or `retired`), `listed`, `is_default`, and `requires_credential`. These are independent questions — see "Public surface" below.
+  3. **Inputs.** `redshift_input`, one of `REDSHIFT_INPUT_REQUIRED`, `REDSHIFT_INPUT_OPTIONAL`, or `REDSHIFT_INPUT_NONE`. This says whether redshift is an *input*; whether your model *estimates* one is the separate `supports_redshift_estimation` flag.
+  4. **Results.** `surfaces`, the ordered list of result surfaces your model offers (see "Result surfaces" below), plus the content flags that gate sections *within* a surface: `supports_redshift_estimation`, `supports_template_overlays`, `supports_rlap`.
+
+  Plus a reference to your classifier class (see step 2).
+
 - Add your definition to the ordered `MODELS` roster in `model_registry/__init__.py`.
-- You do **not** edit `model_factory.py`. `ModelFactory.get_classifier` resolves the definition through the registry (`get_definition(model_type).classifier(config)`), so registering the definition is enough for the factory to build your classifier. The forms, the model-selection cards, and the behavioral gates likewise read from the definition. Exactly one active definition may be the default; the registry's import-time invariant check enforces this.
+- You do **not** edit `model_factory.py`. `ModelFactory.get_classifier` resolves the definition through the registry (`get_definition(model_type).classifier(config)`), so registering the definition is enough for the factory to build your classifier. The forms, the model-selection cards, the result tabs, and the behavioral gates likewise read from the definition. The registry's import-time invariant check enforces that exactly one active definition is the default, that the default is listed and ungated, and that a gated model is never listed.
+
+#### 1a. Public surface: listed, active, gated
+
+Three separate questions, each with its own field:
+
+| Question | Field | Effect |
+|---|---|---|
+| Is it offered for new use? | `status` | A `retired` model leaves the cards and choice lists but still resolves its label for stored results. |
+| Is it advertised? | `listed` | An unlisted model renders no selection card and appears in no choice control. Listing is presentation only, never protection: an unlisted, ungated model stays resolvable by anyone who names it, including through the REST API. |
+| Does reaching it need a credential? | `requires_credential` | A gated model is reachable only by redeeming a model-scoped entry link and presenting a shared access code. It is refused outright by the REST API, and a session scoped to it may enter the classification flow only. |
+
+`requires_credential=True` implies `listed=False`, and a deployment whose roster contains a gated model must configure the gate or refuse to start. Making a model public is clearing both flags — nothing else about the definition changes. See [Serving a gated model](../admin/gated-model-access.md) for the operator side.
+
+#### 1b. Result surfaces
+
+Result tabs are a declared list, not a flag per tab. Your definition names the surfaces it offers, in the order they render, and the first is the default tab:
+
+```python
+surfaces=(SURFACE_CLASSIFICATION,)                       # Classification only
+surfaces=(SURFACE_CLASSIFICATION, SURFACE_DASH_TWINS)    # both, in that order
+```
+
+Every model must declare `SURFACE_CLASSIFICATION`. The ids are opaque to the registry; `app/astrodash/surfaces.py` maps each one to its tab title, its pane markup, and the supporting routes it owns. Declaring an id the surface map does not know refuses startup rather than rendering a broken tab.
+
+Adding a *new* surface is one entry in `SURFACES` plus the id constant — no per-model conditional in `classify.html`. A guard test scans that template (and `batch.html`) for `model_type == '<id>'` comparisons and fails if one reappears, and a second guard walks every route the surface map declares and fails if one is missing the access gate.
 
 #### 2. Implement the classifier
 
@@ -45,12 +78,12 @@ This section explains how to add a first-class model kind (e.g., like `dash` or 
 #### 4. Template/redshift support (optional)
 
 - If your model uses templates (for RLAP or redshift estimation), add a handler under `app/astrodash/infrastructure/ml/templates/` and wire it in `app/astrodash/infrastructure/ml/templates/template_factory.py`.
-- If not supported, leave the capability flags off. The redshift-estimation, twins, template-overlay, and RLAP gates read the definition's `supports_*` flags (e.g. `supports_redshift_estimation`), so a model with those flags `False` is excluded automatically — there is no per-model `model_type == 'dash'` branch to update.
+- If not supported, leave the content flags off. The redshift-estimation, template-overlay, and RLAP gates read the definition's `supports_*` flags, so a model with those flags `False` is excluded automatically — there is no per-model `model_type == 'dash'` branch to update. Whether a *tab* appears is the separate `surfaces` list.
 
 #### 5. API validation and routing
 
-- No allowed-list to widen. The REST endpoints in `app/astrodash/views.py` (`process_spectrum` and `batch_process`) resolve `modelType` through the registry via `_resolve_model_type`: any **active** definition is accepted automatically, and an omitted, unknown, or retired `modelType` returns `400`. Registering your definition with an active `status` is all the API needs to route to it.
-- Extra-input requirements travel on the definition too. Set `requires_redshift=True` and the classify form and batch view enforce it from the flag; you do not add a bespoke validation branch.
+- No allowed-list to widen. The REST endpoints in `app/astrodash/views.py` (`process_spectrum` and `batch_process`) resolve `modelType` through the registry via `_resolve_model_type`: any **active** definition is accepted automatically, and an omitted, unknown, or retired `modelType` returns `400`. Registering your definition with an active `status` is all the API needs to route to it. Listing is not consulted, so an unlisted, ungated model is reachable here; a **gated** model is refused, with a message deliberately identical to the unknown-model refusal.
+- Extra-input requirements travel on the definition too. Set `redshift_input=REDSHIFT_INPUT_REQUIRED` and both the classify form and the batch view enforce it from that policy; you do not add a bespoke validation branch. `REDSHIFT_INPUT_NONE` goes further: neither the redshift field nor the Known Redshift checkbox renders, and a submission without one validates in both flows.
 
 #### 6. Configuration
 
@@ -69,11 +102,12 @@ This section explains how to add a first-class model kind (e.g., like `dash` or 
 
 ### Frontend Changes (Django Templates)
 
-The AstroDash frontend uses Django templates with Bootstrap, and the model-selection surface is now registry-driven — you do not hand-edit the template to add a card:
+The AstroDash frontend uses Django templates with Bootstrap, and the model surface is registry-driven — you do not hand-edit a template to add a card or a tab:
 
-1. The model-selection cards render from the registry's active definitions (title, description, color, feature tags, icon, recommended badge, order), so setting your definition's UI fields adds the card. The form choice lists are generated the same way.
-2. Redshift gating follows your `requires_redshift` flag; RLAP and template-overlay UI follow `supports_rlap` and `supports_template_overlays`. Set the flags rather than adding `'dash'` vs `'transformer'` branches in the template or form.
-3. Ensure the result display matches your outputs (e.g., a model with `supports_rlap=False` produces no RLAP values to show).
+1. The model-selection cards render from the registry's **listed** definitions (title, description, color, feature tags, icon, recommended badge, order), so setting your definition's UI fields adds the card. The form choice lists are generated from the same listing.
+2. The result tabs render from your `surfaces` list, in the declared order, with the first active.
+3. Redshift controls follow your `redshift_input` policy; RLAP and template-overlay UI follow `supports_rlap` and `supports_template_overlays`. Set the fields rather than adding `'dash'` vs `'transformer'` branches in the template or form — a guard test scans the templates for exactly that.
+4. Ensure the result display matches your outputs (e.g., a model with `supports_rlap=False` produces no RLAP values to show).
 
 ### Documentation Updates
 
@@ -90,11 +124,12 @@ The AstroDash frontend uses Django templates with Bootstrap, and the model-selec
   - Registry definition added (`definitions/<id>.py` + `MODELS` entry) and classifier implemented
   - Preprocessor and `prepare_for_model` updated
   - Settings and env variables added
-  - Capability/requirement flags set on the definition (API validation and gates derive from them)
+  - Public surface declared: `status`, `listed`, `requires_credential`
+  - `redshift_input` policy set, and content flags set (API validation and gates derive from them)
 
 - Frontend
   - Definition UI fields set (card renders from the registry)
-  - Capability/requirement flags set (gating derives from them)
+  - `surfaces` list declared in the order the tabs should render
   - Result view aligns with outputs
 
 - Docs & Tests

@@ -18,7 +18,6 @@ client hits the sessions table.
 
 import os
 import re
-from contextlib import contextmanager
 from dataclasses import replace
 from io import StringIO
 from types import SimpleNamespace
@@ -26,148 +25,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
-from django.http import HttpResponse
 from django.test import TestCase
 from django.urls import reverse
 
 from astrodash.core import gate_config, model_access
 from astrodash.infrastructure.ml import model_registry
-
-# The shared credential and signing key every test configures. Neither may be
-# blank or carry the committed ``django-insecure-`` prefix, or the gate reads
-# them as unconfigured.
-GATE_CREDENTIAL = "review-window-access-code"
-GATE_SIGNING_KEY = "test-entry-link-signing-key"
-GATE_LINK_BASE_URL = "https://astrodash-dev.example.org"
-
-
-def gated_roster(model_id="dash"):
-    """Return a roster in which one built-in model is gated.
-
-    Args:
-        model_id: The built-in id to gate. It is made unlisted at the same
-            time, because the registry forbids a gated model from being listed.
-
-    Returns:
-        tuple: A ``MODELS``-shaped tuple suitable for ``patch.object``.
-    """
-    return tuple(
-        replace(m, listed=False, requires_credential=True) if m.id == model_id else m
-        for m in model_registry.MODELS
-    )
-
-
-@contextmanager
-def gate_configured(
-    credential=GATE_CREDENTIAL, ttl_seconds="3600", signing_key=GATE_SIGNING_KEY
-):
-    """Configure the gate's deployment values for the duration of the block.
-
-    The normalized configuration is patched in rather than driven through the
-    environment, because the entry-link signing key *is* ``SECRET_KEY``: moving
-    the real setting would re-sign the test client's session cookie mid-test and
-    every session assertion here would read an empty session instead of the one
-    the gate wrote. ``gate_config``'s own normalization is covered by the
-    registry tests. The link host is a separate value that no session depends
-    on, so it stays an environment read.
-
-    Args:
-        credential: The shared credential an operator would configure.
-        ttl_seconds: The entry-link expiry window, as an operator sets it.
-        signing_key: The key entry links are signed with.
-
-    Yields:
-        None.
-    """
-    configuration = {
-        gate_config.CREDENTIAL_ENV_VAR: credential,
-        gate_config.LINK_TTL_ENV_VAR: ttl_seconds,
-        gate_config.SIGNING_KEY_NAME: signing_key,
-    }
-    with patch.object(
-        model_access, "gate_configuration", return_value=configuration
-    ), patch.dict(os.environ, {gate_config.LINK_BASE_URL_ENV_VAR: GATE_LINK_BASE_URL}):
-        yield
-
-
-@contextmanager
-def gated_gate(model_id="dash", **config):
-    """Patch in a gated roster *and* the gate configuration together.
-
-    Args:
-        model_id: The built-in id to gate.
-        **config: Passed through to :func:`gate_configured`.
-
-    Yields:
-        None.
-    """
-    with patch.object(model_registry, "MODELS", gated_roster(model_id)):
-        with gate_configured(**config):
-            yield
-
-
-def gate_url(token):
-    """Return the entry-link path carrying a token."""
-    return reverse("astrodash:model_gate", args=[token])
-
-
-def classify_post(model):
-    """Return a valid classify-form payload naming a model.
-
-    Args:
-        model: The value to put in the form's model field. Inside a scoped
-            flow this is exactly the field an attacker would alter, so tests
-            vary it independently of the scope.
-
-    Returns:
-        dict: The POST data.
-    """
-    return {
-        "supernova_name": "SN2011fe",
-        "model": model,
-        "smoothing": 0,
-        "min_wave": 3500,
-        "max_wave": 10000,
-    }
-
-
-@contextmanager
-def mocked_classification(model_type):
-    """Run the classify view without model weights or network access.
-
-    Args:
-        model_type: The model the mocked classification reports having run.
-
-    Yields:
-        The mocked classification service, so a test can read back which model
-        the view actually asked it to run.
-    """
-    processed = MagicMock()
-    processed.x = [3000.0, 5000.0, 9000.0]
-    processed.y = [1.0, 2.0, 1.0]
-
-    classification = MagicMock()
-    classification.model_type = model_type
-    classification.results = {"best_matches": [], "embedding": [0.0] * 1024}
-
-    classification_svc = MagicMock(
-        classify_spectrum=AsyncMock(return_value=classification)
-    )
-    with patch(
-        "astrodash.ui_views.get_spectrum_service",
-        return_value=MagicMock(get_spectrum_data=AsyncMock(return_value=MagicMock())),
-    ), patch(
-        "astrodash.ui_views.get_spectrum_processing_service",
-        return_value=MagicMock(
-            process_spectrum_with_params=AsyncMock(return_value=processed)
-        ),
-    ), patch(
-        "astrodash.ui_views.get_classification_service",
-        return_value=classification_svc,
-    ), patch(
-        "astrodash.ui_views.render", return_value=HttpResponse(b"")
-    ):
-        yield classification_svc
+from astrodash.tests.gate_fixtures import (
+    GATE_CREDENTIAL,
+    GATE_LINK_BASE_URL,
+    classify_post,
+    gate_configured,
+    gate_url,
+    gated_gate,
+    gated_roster,
+    mocked_classification,
+)
 
 
 class EntryLinkTokenTests(TestCase):
@@ -810,6 +682,28 @@ class UngatedFlowUnaffectedTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn('id="id_model"', body)
         self.assertNotIn(ScopeEnforcementTests.SCOPED_CONTROL_MARKER, body)
+
+    def test_user_uploaded_model_still_classifies_unchanged(self):
+        """R23/AE7: the gate work leaves the uploaded-model path alone."""
+        session = self.client.session
+        session["selected_model_type"] = "user_uploaded"
+        session["selected_model_id"] = "um-1"
+        session.save()
+        model_svc = MagicMock(
+            get_model=AsyncMock(return_value=SimpleNamespace(name="My model"))
+        )
+        with patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ), mocked_classification("user_uploaded") as classification_svc:
+            self.client.post(
+                reverse("astrodash:classify"), data=classify_post("user_uploaded")
+            )
+        kwargs = classification_svc.classify_spectrum.await_args.kwargs
+        self.assertEqual(kwargs["model_type"], "user_uploaded")
+        self.assertEqual(kwargs["user_model_id"], "um-1")
+        # A model the registry cannot resolve declares no twins surface, so
+        # nothing is stashed for it -- exactly as before.
+        self.assertNotIn("classify_dash_embedding", self.client.session)
 
     def test_public_twins_routes_still_served_for_dash(self):
         session = self.client.session
