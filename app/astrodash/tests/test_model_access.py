@@ -464,6 +464,20 @@ class ScopeEnforcementTests(TestCase):
         # The dropdown is not offered alongside it.
         self.assertNotIn('id="id_model"', body)
 
+    def test_scoped_page_leaks_no_template_comment_text(self):
+        """A ``{# #}`` comment that spans lines is rendered, not stripped."""
+        self._redeem()
+        with gated_gate(), patch.object(model_access, "_now", return_value=1001.0):
+            resp = self.client.get(reverse("astrodash:classify"))
+        body = resp.content.decode()
+        self.assertEqual(resp.status_code, 200)
+        for delimiter in ("{#", "#}"):
+            self.assertNotIn(
+                delimiter,
+                body,
+                "template comment delimiters reached the rendered page",
+            )
+
     # --- the model that actually runs ---
 
     def test_scoped_submission_validates_though_the_model_is_unlisted(self):

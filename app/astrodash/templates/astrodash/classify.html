@@ -52,10 +52,12 @@
                         {% csrf_token %}
 
                         {% if scoped_model_display %}
-                        {# A scoped session runs one model and cannot be moved
-                           to another, so the control is disabled and named.
-                           The hidden input keeps the field posted; the view
-                           takes the model from the scope regardless. #}
+                        {% comment %}
+                          A scoped session runs one model and cannot be moved
+                          to another, so the control is disabled and named.
+                          The hidden input keeps the field posted; the view
+                          takes the model from the scope regardless.
+                        {% endcomment %}
                         <input type="hidden" name="model" value="{{ scoped_model_type }}">
                         <div class="form-group">
                             <label class="form-label" for="scoped-model-name">Model</label>
@@ -117,9 +119,11 @@
                         </div>
                     </form>
                     {% if scoped_model_display %}
-                    {# Persistent, not only on a refused navigation: a reviewer
-                       who never leaves this page must still be able to end the
-                       session. Outside the form above, since forms cannot nest. #}
+                    {% comment %}
+                      Persistent, not only on a refused navigation: a reviewer
+                      who never leaves this page must still be able to end the
+                      session. Outside the form above, since forms cannot nest.
+                    {% endcomment %}
                     <hr>
                     <form method="post" action="{% url 'astrodash:end_model_scope' %}">
                         {% csrf_token %}

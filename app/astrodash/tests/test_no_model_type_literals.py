@@ -81,9 +81,27 @@ GATE_FILES = (
 # numbers intact, so a real hit still reports where it is.
 TEMPLATE_COMMENT_PATTERNS = (
     re.compile(r"<!--.*?-->", re.DOTALL),
-    re.compile(r"\{#.*?#\}", re.DOTALL),
+    # Django's own lexer is ``{%.*?%}|{{.*?}}|{#.*?#}`` with no DOTALL, so a
+    # ``{# #}`` comment cannot span lines -- a multi-line one is rendered to the
+    # visitor verbatim. Stripping it here without that restriction would make
+    # the guard blind to a literal that actually reaches the page, so this
+    # pattern stays single-line for the same reason Django's is.
+    re.compile(r"\{#[^\n]*?#\}"),
     re.compile(r"\{%\s*comment\s*.*?%\}.*?\{%\s*endcomment\s*%\}", re.DOTALL),
 )
+
+# Every template the app renders. The multi-line-comment guard below scans all
+# of them, not just the gate files: the defect is a property of the syntax, so
+# it can appear in any template.
+TEMPLATE_ROOTS = (
+    "astrodash/templates",
+    "../users/templates",
+)
+
+# What an author meant as a Django comment. Matched WITH DOTALL on purpose --
+# the point is to find spans that look like comments to a human but are not
+# comments to Django.
+INTENDED_COMMENT_PATTERN = re.compile(r"\{#.*?#\}", re.DOTALL)
 
 # A conditional comparison of a value against a quoted built-in model id, in
 # either order (``x == 'dash'`` or ``'dash' == x``). The quote style is
@@ -227,6 +245,14 @@ class GuardPatternsTests(SimpleTestCase):
                 f"comment was not stripped: {comment}",
             )
 
+    def test_a_literal_inside_a_multiline_hash_comment_still_trips_the_guard(
+        self,
+    ) -> None:
+        """Django renders that span, so the literal reaches the page."""
+        not_really_a_comment = "{# see below\n   {% if model_type == 'dash' %} #}"
+        stripped = _strip_template_comments(not_really_a_comment)
+        self.assertTrue(COMPARISON_PATTERN.search(stripped))
+
     def test_a_live_template_literal_still_trips_the_guard(self) -> None:
         live = "{% if selected_model_type == 'dash' %}"
         self.assertTrue(COMPARISON_PATTERN.search(_strip_template_comments(live)))
@@ -241,6 +267,82 @@ class GuardPatternsTests(SimpleTestCase):
             if COMPARISON_PATTERN.search(line)
         ]
         self.assertEqual(hit, [4])
+
+
+def _multiline_django_comments(path: Path) -> List[Tuple[int, str]]:
+    """Find ``{# ... #}`` spans that cross a newline in one template.
+
+    Args:
+        path: The template to scan.
+
+    Returns:
+        A list of ``(lineno, first_line)`` tuples -- one per offending span.
+        Empty when the template is clean.
+    """
+    text = path.read_text(encoding="utf-8")
+    hits: List[Tuple[int, str]] = []
+    for match in INTENDED_COMMENT_PATTERN.finditer(text):
+        if "\n" in match.group(0):
+            lineno = text.count("\n", 0, match.start()) + 1
+            hits.append((lineno, match.group(0).splitlines()[0]))
+    return hits
+
+
+class NoMultilineTemplateCommentsTests(SimpleTestCase):
+    """A ``{# #}`` comment that spans lines is rendered, not hidden.
+
+    Django's lexer matches ``{#.*?#}`` without DOTALL, so a comment carrying a
+    newline is never tokenized as a comment: the visitor sees the text. It is
+    an easy mistake to make -- the syntax looks block-shaped -- and the failure
+    is silent in any template whose stray text lands outside a rendered block,
+    so it survives review until someone reads a page carefully.
+    """
+
+    def _templates(self) -> List[Path]:
+        found: List[Path] = []
+        for root in TEMPLATE_ROOTS:
+            found.extend(sorted((APP_ROOT / root).rglob("*.html")))
+        return found
+
+    def test_templates_have_no_multiline_django_comments(self) -> None:
+        offenders: List[str] = []
+        for path in self._templates():
+            for lineno, first_line in _multiline_django_comments(path):
+                rel = path.relative_to(APP_ROOT)
+                offenders.append(f"  {rel}:{lineno}: {first_line.strip()}")
+
+        self.assertFalse(
+            offenders,
+            "These '{#' comments span a newline, so Django renders them to the "
+            "visitor instead of stripping them. Use "
+            "{% comment %}...{% endcomment %} for a multi-line comment:\n"
+            + "\n".join(offenders),
+        )
+
+    def test_the_scan_finds_a_multiline_comment(self) -> None:
+        """The guard fires on the shape it exists to catch."""
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as handle:
+            handle.write("<p>a</p>\n{# first line\n   second line #}\n<p>b</p>\n")
+            offender = Path(handle.name)
+        try:
+            self.assertEqual(
+                _multiline_django_comments(offender), [(2, "{# first line")]
+            )
+        finally:
+            offender.unlink()
+
+    def test_the_scan_ignores_a_single_line_comment(self) -> None:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as handle:
+            handle.write("<p>a</p>\n{# a real comment #}\n<p>b</p>\n")
+            clean = Path(handle.name)
+        try:
+            self.assertEqual(_multiline_django_comments(clean), [])
+        finally:
+            clean.unlink()
 
 
 def _is_gated(view) -> bool:
