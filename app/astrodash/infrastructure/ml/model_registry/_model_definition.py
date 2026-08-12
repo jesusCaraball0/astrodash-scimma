@@ -12,10 +12,18 @@ from typing import Optional, Tuple, Type
 
 from astrodash.infrastructure.ml.classifiers.base import BaseClassifier
 
-# Lifecycle status values. "active" models appear on the selection surfaces;
-# "retired" models are hidden from new use but still resolve their label/fields.
+# Lifecycle status values. "active" models are offered for new use; "retired"
+# models are hidden from new use but still resolve their label/fields.
+# Whether a model is *listed* is a separate declaration (see ``listed`` below).
 STATUS_ACTIVE = "active"
 STATUS_RETIRED = "retired"
+
+# Redshift input policies. A model declares redshift as a required input, an
+# optional input, or not an input at all. This is independent of whether the
+# model *estimates* a redshift as an output (``supports_redshift_estimation``).
+REDSHIFT_INPUT_REQUIRED = "required"
+REDSHIFT_INPUT_OPTIONAL = "optional"
+REDSHIFT_INPUT_NONE = "none"
 
 
 @dataclass(frozen=True)
@@ -33,10 +41,21 @@ class ModelDefinition:
             ``None`` for models with no icon.
         recommended: Whether the card shows the RECOMMENDED badge.
         status: Lifecycle status, :data:`STATUS_ACTIVE` or :data:`STATUS_RETIRED`.
+        listed: Whether the model is offered on the selection surfaces (cards,
+            form choice controls). Listing is presentation only and never
+            access control: an unlisted model that requires no credential
+            stays reachable by anyone who names it. A gated model is always
+            unlisted, and the active default is always listed.
         is_default: Whether this is the default selected model. Exactly one
             active definition must be the default.
-        requires_redshift: Whether a redshift is required to classify with this
-            model (drives the classify-form and batch-view validation gates).
+        requires_credential: Whether running the model requires the shared
+            credential, reached only through a model-scoped entry link. Implies
+            ``listed`` is ``False``.
+        redshift_input: Redshift input policy -- one of
+            :data:`REDSHIFT_INPUT_REQUIRED`, :data:`REDSHIFT_INPUT_OPTIONAL`,
+            or :data:`REDSHIFT_INPUT_NONE`. Drives the classify-form and
+            batch-view validation gates and whether the redshift controls
+            render at all.
         preprocessing: Identifier of the preprocessing variant this model needs,
             consumed by the spectrum processing service (e.g. ``"dash"``).
         supports_twins: Whether a classification with this model can seed the
@@ -58,8 +77,10 @@ class ModelDefinition:
     icon: Optional[str]
     recommended: bool
     status: str
+    listed: bool
     is_default: bool
-    requires_redshift: bool
+    requires_credential: bool
+    redshift_input: str
     preprocessing: str
     supports_twins: bool
     supports_redshift_estimation: bool
@@ -71,3 +92,12 @@ class ModelDefinition:
     def is_active(self) -> bool:
         """Whether the model is currently active (not retired)."""
         return self.status == STATUS_ACTIVE
+
+    @property
+    def requires_redshift(self) -> bool:
+        """Whether a redshift must be supplied to classify with this model.
+
+        Derived from :attr:`redshift_input` so the read sites that predate the
+        three-way policy keep working unchanged until they are migrated.
+        """
+        return self.redshift_input == REDSHIFT_INPUT_REQUIRED
