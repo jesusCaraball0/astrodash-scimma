@@ -9,6 +9,13 @@ urlpatterns = [
     # UI Views
     path("", ui_views.landing_page, name="landing_page"),
     path("select-model/", ui_views.model_selection, name="model_selection"),
+    # The explicit end of a model-scoped session. Declared before the entry-link
+    # route below, whose token pattern would otherwise swallow this path.
+    path("model-access/end/", ui_views.end_model_scope, name="end_model_scope"),
+    # The entry link for a gated model. This is the redeem side only: no route
+    # mints a link, because minting is an operator action (see the
+    # mint_model_link management command).
+    path("model-access/<str:token>/", ui_views.model_gate, name="model_gate"),
     path("classify/", ui_views.classify, name="classify"),
     path("batch/", ui_views.batch_process, name="batch_process_ui"),
     path("team/", ui_views.team_members, name="team_members"),

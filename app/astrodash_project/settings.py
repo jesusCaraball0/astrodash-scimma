@@ -67,6 +67,10 @@ CSRF_TRUSTED_ORIGINS = ["http://localhost", "http://localhost:8000", "http://loc
 for hostname in HOSTNAMES:
     CSRF_TRUSTED_ORIGINS.append(f"""https://{hostname}""")
 CSRF_COOKIE_SECURE = True
+# The session cookie can now carry authorization -- a session scoped to a gated
+# model -- and not merely a model preference, so it is marked secure alongside
+# the CSRF cookie rather than being left to travel in plaintext.
+SESSION_COOKIE_SECURE = True
 
 # Application definition
 

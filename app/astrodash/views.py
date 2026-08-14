@@ -70,6 +70,14 @@ def _resolve_model_type(params: dict, model_id: str | None) -> str:
     A present ``model_id`` takes precedence and routes to the user-uploaded
     path without consulting the registry (mirroring the factory precedence).
 
+    A model that requires the shared credential is refused outright: the REST
+    API offers no way to present that credential, so a gated model is never
+    reachable here. The refusal is deliberately identical to the unknown-model
+    refusal, so the endpoint cannot be used to enumerate unreleased models.
+
+    Listing is not consulted: it is presentation only, so an unlisted model
+    that requires no credential stays resolvable by anyone who names it.
+
     Args:
         params: Parsed request params; ``modelType`` is read from here.
         model_id: The user-uploaded model id, if any. When truthy it wins.
@@ -80,8 +88,8 @@ def _resolve_model_type(params: dict, model_id: str | None) -> str:
 
     Raises:
         AppException: With HTTP 400 when, absent a ``model_id``, ``modelType``
-            is omitted/empty, names no registry definition, or names a retired
-            (inactive) definition.
+            is omitted/empty, names no registry definition, names a definition
+            requiring a credential, or names a retired (inactive) definition.
     """
     if model_id:
         return "user_uploaded"
@@ -92,6 +100,12 @@ def _resolve_model_type(params: dict, model_id: str | None) -> str:
 
     definition = get_definition(model_type)
     if definition is None:
+        raise AppException(
+            f"Unknown model type: {model_type}.", status_code=HTTP_400_BAD_REQUEST
+        )
+    # Checked before the status check so a gated model that is also retired
+    # still answers with the unknown-model refusal and discloses nothing.
+    if definition.requires_credential:
         raise AppException(
             f"Unknown model type: {model_type}.", status_code=HTTP_400_BAD_REQUEST
         )

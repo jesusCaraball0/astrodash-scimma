@@ -12,10 +12,27 @@ from typing import Optional, Tuple, Type
 
 from astrodash.infrastructure.ml.classifiers.base import BaseClassifier
 
-# Lifecycle status values. "active" models appear on the selection surfaces;
-# "retired" models are hidden from new use but still resolve their label/fields.
+# Lifecycle status values. "active" models are offered for new use; "retired"
+# models are hidden from new use but still resolve their label/fields.
+# Whether a model is *listed* is a separate declaration (see ``listed`` below).
 STATUS_ACTIVE = "active"
 STATUS_RETIRED = "retired"
+
+# Redshift input policies. A model declares redshift as a required input, an
+# optional input, or not an input at all. This is independent of whether the
+# model *estimates* a redshift as an output (``supports_redshift_estimation``).
+REDSHIFT_INPUT_REQUIRED = "required"
+REDSHIFT_INPUT_OPTIONAL = "optional"
+REDSHIFT_INPUT_NONE = "none"
+
+# Result surface ids. A definition declares these as opaque identifiers; how a
+# surface presents itself (tab title, pane markup, supporting routes) is
+# web-layer knowledge and lives in ``astrodash.surfaces``, because nothing here
+# imports Django or knows about URL names. Every definition must declare
+# :data:`SURFACE_CLASSIFICATION` -- a model that classifies always has a
+# classification result to show.
+SURFACE_CLASSIFICATION = "classification"
+SURFACE_DASH_TWINS = "dash_twins"
 
 
 @dataclass(frozen=True)
@@ -33,14 +50,28 @@ class ModelDefinition:
             ``None`` for models with no icon.
         recommended: Whether the card shows the RECOMMENDED badge.
         status: Lifecycle status, :data:`STATUS_ACTIVE` or :data:`STATUS_RETIRED`.
+        listed: Whether the model is offered on the selection surfaces (cards,
+            form choice controls). Listing is presentation only and never
+            access control: an unlisted model that requires no credential
+            stays reachable by anyone who names it. A gated model is always
+            unlisted, and the active default is always listed.
         is_default: Whether this is the default selected model. Exactly one
             active definition must be the default.
-        requires_redshift: Whether a redshift is required to classify with this
-            model (drives the classify-form and batch-view validation gates).
+        requires_credential: Whether running the model requires the shared
+            credential, reached only through a model-scoped entry link. Implies
+            ``listed`` is ``False``.
+        redshift_input: Redshift input policy -- one of
+            :data:`REDSHIFT_INPUT_REQUIRED`, :data:`REDSHIFT_INPUT_OPTIONAL`,
+            or :data:`REDSHIFT_INPUT_NONE`. Drives the classify-form and
+            batch-view validation gates and whether the redshift controls
+            render at all.
         preprocessing: Identifier of the preprocessing variant this model needs,
             consumed by the spectrum processing service (e.g. ``"dash"``).
-        supports_twins: Whether a classification with this model can seed the
-            FIND TWINS embedding search.
+        surfaces: Ordered ids of the result surfaces this model offers, the
+            first being the default tab. Only declared surfaces render, in this
+            order. The ids are opaque here and resolved through the web layer's
+            surface map; the list must be non-empty and must include
+            :data:`SURFACE_CLASSIFICATION`.
         supports_redshift_estimation: Whether template-based redshift estimation
             is offered for this model.
         supports_template_overlays: Whether the result view offers the template
@@ -58,10 +89,12 @@ class ModelDefinition:
     icon: Optional[str]
     recommended: bool
     status: str
+    listed: bool
     is_default: bool
-    requires_redshift: bool
+    requires_credential: bool
+    redshift_input: str
     preprocessing: str
-    supports_twins: bool
+    surfaces: Tuple[str, ...]
     supports_redshift_estimation: bool
     supports_template_overlays: bool
     supports_rlap: bool

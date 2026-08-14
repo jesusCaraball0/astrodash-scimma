@@ -2,17 +2,72 @@ from django import forms
 from django.core.validators import FileExtensionValidator
 import json
 import ast
+from typing import Optional
 
 from astrodash.infrastructure.ml.model_registry import (
-    active_definitions,
+    REDSHIFT_INPUT_NONE,
+    REDSHIFT_INPUT_OPTIONAL,
+    REDSHIFT_INPUT_REQUIRED,
     default_definition,
     get_definition,
+    listed_definitions,
 )
+
+# The message both redshift gates (this form and the batch view's own check)
+# raise when a model that requires a redshift is submitted without one. It
+# names no model: the requirement comes from the selected model's declared
+# policy, so any model can carry it.
+REDSHIFT_REQUIRED_MESSAGE = "Redshift is required for the selected model."
+
+
+def redshift_input_policy(model_id: Optional[str]) -> str:
+    """Resolve a model selection to its declared redshift input policy.
+
+    Args:
+        model_id: The selected ``model_type``, or ``None`` when no model is
+            selected.
+
+    Returns:
+        One of :data:`REDSHIFT_INPUT_REQUIRED`, :data:`REDSHIFT_INPUT_OPTIONAL`
+        or :data:`REDSHIFT_INPUT_NONE`. A selection the registry cannot resolve
+        -- a user-uploaded model, or no selection at all -- falls back to
+        :data:`REDSHIFT_INPUT_OPTIONAL`, which is the behavior that path has
+        always had.
+    """
+    definition = get_definition(model_id) if model_id else None
+    if definition is None:
+        return REDSHIFT_INPUT_OPTIONAL
+    return definition.redshift_input
+
+
+def takes_redshift_input(model_id: Optional[str]) -> bool:
+    """Whether a model selection takes a redshift as an input at all.
+
+    Drives whether the redshift field and the Known Redshift checkbox render:
+    a model that declines redshift shows neither control.
+
+    Args:
+        model_id: The selected ``model_type``, or ``None`` when no model is
+            selected.
+
+    Returns:
+        True unless the selected model declares :data:`REDSHIFT_INPUT_NONE`.
+    """
+    return redshift_input_policy(model_id) != REDSHIFT_INPUT_NONE
 
 
 def _builtin_model_choices():
-    """Return (id, title) choices for the active built-in models, in registry order."""
-    return [(d.id, d.title) for d in active_definitions()]
+    """Return (id, title) choices for the listed built-in models, in registry order.
+
+    Listing, not lifecycle status, decides what a choice control offers: an
+    unlisted model must appear in no control an ordinary visitor can reach.
+    Because a ``ChoiceField`` also validates against its choices, dropping an
+    unlisted model here is what makes a hand-crafted POST naming it invalid.
+
+    Returns:
+        A list of ``(id, title)`` pairs in registry order.
+    """
+    return [(d.id, d.title) for d in listed_definitions()]
 
 
 def _classify_model_choices():
@@ -82,10 +137,28 @@ class ClassifyForm(forms.Form):
         widget=forms.NumberInput(attrs={'class': 'form-control', 'step': 'any'})
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, effective_model=None, **kwargs):
+        """Build the form, optionally bound to the model that will actually run.
+
+        Args:
+            *args: Standard form positional arguments (data, files).
+            effective_model: The model the view will run -- the scoped model in
+                a scoped session, otherwise the session's selection. It becomes
+                the field's initial value, it is added to the choices when the
+                registry knows it (a gated model is unlisted, so it is in no
+                listed choice set, and a scoped submission would otherwise fail
+                validation before the view consulted the scope), and it decides
+                the redshift policy this form validates against.
+            **kwargs: Standard form keyword arguments.
+        """
         super().__init__(*args, **kwargs)
-        self.fields['model'].choices = _classify_model_choices()
-        self.fields['model'].initial = default_definition().id
+        self.effective_model = effective_model
+        choices = _classify_model_choices()
+        definition = get_definition(effective_model) if effective_model else None
+        if definition is not None and definition.id not in [c[0] for c in choices]:
+            choices.append((definition.id, definition.title))
+        self.fields['model'].choices = choices
+        self.fields['model'].initial = effective_model or default_definition().id
 
     def clean(self):
         cleaned_data = super().clean()
@@ -93,7 +166,9 @@ class ClassifyForm(forms.Form):
         supernova_name = cleaned_data.get('supernova_name')
         known_z = cleaned_data.get('known_z')
         redshift = cleaned_data.get('redshift')
-        model = cleaned_data.get('model')
+        # The redshift policy follows the model that will actually run, not the
+        # submitted field: inside a scoped flow the field is not authoritative.
+        model = self.effective_model or cleaned_data.get('model')
 
         if not file and not supernova_name:
             raise forms.ValidationError("Please provide either a spectrum file or a Supernova Name.")
@@ -101,11 +176,11 @@ class ClassifyForm(forms.Form):
         if known_z and redshift is None:
             self.add_error('redshift', "Redshift is required when 'Known Redshift' is checked.")
 
-        # Require redshift only for models whose definition demands it (built-in
-        # Transformer today); user-uploaded models use 0.0 if missing.
-        definition = get_definition(model)
-        if definition is not None and definition.requires_redshift and redshift is None:
-            self.add_error('redshift', "Redshift is required for Transformer model.")
+        # Require a redshift only when the selected model's declared policy
+        # says it is a required input; an optional-input or unresolvable
+        # selection (user-uploaded models use 0.0 if missing) passes without one.
+        if redshift_input_policy(model) == REDSHIFT_INPUT_REQUIRED and redshift is None:
+            self.add_error('redshift', REDSHIFT_REQUIRED_MESSAGE)
 
         return cleaned_data
 
