@@ -11,16 +11,24 @@ exercised by driving the classify view with the spectrum/processing/
 classification services mocked, so no weights or network access are needed.
 """
 
+import json
 import re
+import tempfile
+from contextlib import nullcontext
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
+from django.core.signals import request_finished
+from django.db import close_old_connections
 from django.http import HttpResponse
-from django.test import Client, TestCase
+from django.test import Client, SimpleTestCase, TestCase
 from django.urls import reverse
 
-from astrodash.forms import ClassifyForm
+from astrodash.forms import ClassifyForm, ModelSelectionForm
+from astrodash.infrastructure.ml import model_registry
 from astrodash.ui_views import _format_batch_results
 from astrodash.domain.services.redshift_service import RedshiftService
 from astrodash.domain.services.spectrum_processing_service import (
@@ -93,6 +101,105 @@ class SelectModelPageParityTests(TestCase):
         self.assertNotIn(".model-card.selected[data-model-type", visible)
 
 
+class UnlistedModelSurfaceTests(TestCase):
+    """AE1: an unlisted model leaves every surface an ordinary visitor reaches.
+
+    DASH is made unlisted (but active and ungated) for the duration of each
+    test, following the registry fixture idiom of ``dataclasses.replace`` over
+    a patched roster. Transformer is untouched, so it stays the listed, ungated
+    active default the registry invariants require, and doubles as the control
+    proving only the unlisted model disappeared.
+    """
+
+    def _unlisted_roster(self):
+        """Return a roster where DASH is active and ungated but not listed.
+
+        Returns:
+            tuple: A ``MODELS``-shaped tuple suitable for ``patch.object``.
+        """
+        transformer = model_registry.get_definition("transformer")
+        dash = model_registry.get_definition("dash")
+        return (transformer, replace(dash, listed=False))
+
+    def _render_visible(self, action):
+        """Render the select-model page for an action, comments stripped.
+
+        Args:
+            action: The ``action`` query value, ``"classify"`` or ``"batch"``.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed, so
+            the assertions see only selectable cards (the user-model/upload
+            cards live inside comments).
+        """
+        model_svc = MagicMock(list_models=AsyncMock(return_value=[]))
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()), patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ):
+            resp = self.client.get(
+                reverse("astrodash:model_selection") + f"?action={action}"
+            )
+        self.assertEqual(resp.status_code, 200)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    def test_unlisted_model_renders_no_card_for_classify_action(self):
+        visible = self._render_visible("classify")
+        self.assertNotIn("onclick=\"selectModel('dash')\"", visible)
+        self.assertIn("onclick=\"selectModel('transformer')\"", visible)
+
+    def test_unlisted_model_renders_no_card_for_batch_action(self):
+        visible = self._render_visible("batch")
+        self.assertNotIn("onclick=\"selectModel('dash')\"", visible)
+        self.assertIn("onclick=\"selectModel('transformer')\"", visible)
+
+    def test_unlisted_model_absent_from_classify_form_choices(self):
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()):
+            choices = [value for value, _ in ClassifyForm().fields["model"].choices]
+        self.assertNotIn("dash", choices)
+        self.assertIn("transformer", choices)
+        # The user-uploaded entry is unrelated to listing and stays put.
+        self.assertIn("user_uploaded", choices)
+
+    def test_unlisted_model_absent_from_selection_form_choices(self):
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()):
+            choices = [
+                value for value, _ in ModelSelectionForm().fields["model_type"].choices
+            ]
+        self.assertNotIn("dash", choices)
+        self.assertIn("transformer", choices)
+
+    def _post_selection(self, model_type):
+        """POST the selection form naming a model, with the model service mocked.
+
+        Args:
+            model_type: The ``model_type`` value to submit.
+
+        Returns:
+            The view's ``HttpResponse``.
+        """
+        model_svc = MagicMock(list_models=AsyncMock(return_value=[]))
+        with patch.object(model_registry, "MODELS", self._unlisted_roster()), patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ):
+            return self.client.post(
+                reverse("astrodash:model_selection"),
+                data={"model_type": model_type, "action_type": "classify"},
+            )
+
+    def test_selection_post_naming_unlisted_model_is_refused(self):
+        resp = self._post_selection("dash")
+        # Refused: the page redisplays instead of redirecting into classify,
+        # and nothing is written to the session.
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("model_type", resp.context["form"].errors)
+        self.assertIsNone(self.client.session.get("selected_model_type"))
+
+    def test_selection_post_naming_listed_model_still_succeeds(self):
+        resp = self._post_selection("transformer")
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(self.client.session.get("selected_model_type"), "transformer")
+
+
 class ClassifyFormRedshiftParityTests(TestCase):
     """AE2 / AE3: Transformer requires a redshift; DASH does not."""
 
@@ -110,11 +217,17 @@ class ClassifyFormRedshiftParityTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("redshift", form.errors)
         self.assertTrue(
-            any(
-                "Redshift is required for Transformer" in e
-                for e in form.errors["redshift"]
-            )
+            any("Redshift is required" in e for e in form.errors["redshift"])
         )
+
+    def test_required_redshift_message_names_no_model(self):
+        """R13: the message follows the policy, so it names no model literally."""
+        form = ClassifyForm(data=self._base_data("transformer"))
+        self.assertFalse(form.is_valid())
+        for error in form.errors["redshift"]:
+            self.assertNotIn("Transformer", error)
+            self.assertNotIn("transformer", error)
+            self.assertNotIn("Dash", error)
 
     def test_dash_does_not_require_redshift(self):
         form = ClassifyForm(data=self._base_data("dash"))
@@ -258,16 +371,211 @@ class BatchRedshiftGateParityTests(TestCase):
         self.assertIn("redshift", resp.context["form"].errors)
         self.assertTrue(
             any(
-                "Redshift is required for Transformer" in e
+                "Redshift is required" in e
                 for e in resp.context["form"].errors["redshift"]
             )
         )
+
+    def test_batch_required_redshift_message_names_no_model(self):
+        """R13: the batch gate's message follows the policy, naming no model."""
+        resp = self._post_batch("transformer")
+        for error in resp.context["form"].errors["redshift"]:
+            self.assertNotIn("Transformer", error)
+            self.assertNotIn("transformer", error)
+            self.assertNotIn("Dash", error)
 
     def test_dash_batch_does_not_require_redshift(self):
         resp = self._post_batch("dash")
         self.assertEqual(resp.status_code, 200)
         # DASH does not require a redshift, so the gate adds no redshift error
         # (the request instead falls through to the "no files uploaded" path).
+        self.assertNotIn("redshift", resp.context["form"].errors)
+
+
+class RedshiftInputPolicyFlowTests(TestCase):
+    """R13/R14/AE4: the three-way redshift input policy governs both UI flows.
+
+    A model declaring :data:`REDSHIFT_INPUT_NONE` takes no redshift at all, so
+    neither the redshift field nor the Known Redshift checkbox may render, and
+    a submission without a redshift must validate -- in the classification flow
+    and the batch flow alike, which run through two independent gates (the
+    classify form's ``clean`` and the batch view's own check).
+
+    DASH is the model whose policy is varied, following the registry fixture
+    idiom of ``dataclasses.replace`` over a patched roster; Transformer is left
+    untouched so it keeps satisfying the registry invariants and doubles as the
+    unchanged control.
+    """
+
+    # Markers for the two controls as crispy renders them.
+    REDSHIFT_FIELD_MARKER = 'id="id_redshift"'
+    KNOWN_Z_FIELD_MARKER = 'id="id_known_z"'
+
+    def _roster(self, policy):
+        """Return a roster where DASH declares the given redshift input policy.
+
+        Args:
+            policy: One of the ``REDSHIFT_INPUT_*`` constants.
+
+        Returns:
+            tuple: A ``MODELS``-shaped tuple suitable for ``patch.object``.
+        """
+        transformer = model_registry.get_definition("transformer")
+        dash = model_registry.get_definition("dash")
+        return (transformer, replace(dash, redshift_input=policy))
+
+    def _base_classify_data(self, model):
+        return {
+            "supernova_name": "SN2011fe",
+            "model": model,
+            "smoothing": 0,
+            "min_wave": 3500,
+            "max_wave": 10000,
+        }
+
+    def _render_visible(self, url_name, model_type, roster=None):
+        """GET a flow's page with a model selected and return its visible HTML.
+
+        Args:
+            url_name: The URL name to reverse (``astrodash:classify`` or
+                ``astrodash:batch_process_ui``).
+            model_type: The value to place in the session as the selected model.
+            roster: Optional ``MODELS``-shaped tuple to patch in for the request.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed, so
+            assertions see only what actually renders.
+        """
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        if model_type == "user_uploaded":
+            session["selected_model_id"] = "user-model-1"
+        session.save()
+
+        # The classify view resolves a display name for a user-uploaded model;
+        # mock the service so no DB/filesystem work happens.
+        model_svc = MagicMock(
+            get_model=AsyncMock(return_value=SimpleNamespace(name="My uploaded model"))
+        )
+        roster_patch = (
+            patch.object(model_registry, "MODELS", roster)
+            if roster is not None
+            else nullcontext()
+        )
+        with roster_patch, patch(
+            "astrodash.ui_views.get_model_service", return_value=model_svc
+        ):
+            resp = self.client.get(reverse(url_name))
+        self.assertEqual(resp.status_code, 200)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    def _post_batch(self, model_type, roster=None, **extra):
+        """POST the batch form for a selected model, with an optional roster."""
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        session.save()
+        data = {"smoothing": 0, "min_wave": 3500, "max_wave": 10000}
+        data.update(extra)
+        roster_patch = (
+            patch.object(model_registry, "MODELS", roster)
+            if roster is not None
+            else nullcontext()
+        )
+        with roster_patch:
+            return self.client.post(reverse("astrodash:batch_process_ui"), data=data)
+
+    # --- rendering: neither control for a model that declines redshift ---
+
+    def test_declining_model_renders_no_redshift_controls_in_classify(self):
+        """AE4: no redshift field and no Known Redshift checkbox."""
+        html = self._render_visible(
+            "astrodash:classify",
+            "dash",
+            self._roster(model_registry.REDSHIFT_INPUT_NONE),
+        )
+        self.assertNotIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertNotIn(self.KNOWN_Z_FIELD_MARKER, html)
+        # A control proving the form itself still rendered.
+        self.assertIn('id="id_smoothing"', html)
+
+    def test_declining_model_renders_no_redshift_controls_in_batch(self):
+        html = self._render_visible(
+            "astrodash:batch_process_ui",
+            "dash",
+            self._roster(model_registry.REDSHIFT_INPUT_NONE),
+        )
+        self.assertNotIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertNotIn(self.KNOWN_Z_FIELD_MARKER, html)
+        self.assertIn('id="id_smoothing"', html)
+
+    def test_optional_policy_still_renders_both_controls_in_classify(self):
+        html = self._render_visible("astrodash:classify", "dash")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_optional_policy_still_renders_both_controls_in_batch(self):
+        html = self._render_visible("astrodash:batch_process_ui", "dash")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_required_policy_still_renders_both_controls_in_classify(self):
+        html = self._render_visible("astrodash:classify", "transformer")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    # --- validation: a submission omitting redshift passes in both flows ---
+
+    def test_declining_model_validates_without_redshift_in_classify(self):
+        with patch.object(
+            model_registry, "MODELS", self._roster(model_registry.REDSHIFT_INPUT_NONE)
+        ):
+            form = ClassifyForm(data=self._base_classify_data("dash"))
+            self.assertTrue(form.is_valid(), form.errors)
+
+    def test_declining_model_validates_without_redshift_in_batch(self):
+        resp = self._post_batch(
+            "dash", roster=self._roster(model_registry.REDSHIFT_INPUT_NONE)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn("redshift", resp.context["form"].errors)
+
+    def test_required_policy_rejects_missing_redshift_in_classify(self):
+        """The gate follows the policy, not the model: DASH made required fails."""
+        with patch.object(
+            model_registry,
+            "MODELS",
+            self._roster(model_registry.REDSHIFT_INPUT_REQUIRED),
+        ):
+            form = ClassifyForm(data=self._base_classify_data("dash"))
+            self.assertFalse(form.is_valid())
+            self.assertIn("redshift", form.errors)
+
+    def test_required_policy_rejects_missing_redshift_in_batch(self):
+        resp = self._post_batch(
+            "dash", roster=self._roster(model_registry.REDSHIFT_INPUT_REQUIRED)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("redshift", resp.context["form"].errors)
+
+    # --- KTD10: an unresolvable selection keeps today's optional behavior ---
+
+    def test_user_uploaded_selection_still_renders_both_controls(self):
+        html = self._render_visible("astrodash:classify", "user_uploaded")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_user_uploaded_selection_still_renders_both_controls_in_batch(self):
+        html = self._render_visible("astrodash:batch_process_ui", "user_uploaded")
+        self.assertIn(self.REDSHIFT_FIELD_MARKER, html)
+        self.assertIn(self.KNOWN_Z_FIELD_MARKER, html)
+
+    def test_user_uploaded_selection_validates_without_redshift(self):
+        form = ClassifyForm(data=self._base_classify_data("user_uploaded"))
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_user_uploaded_batch_validates_without_redshift(self):
+        resp = self._post_batch("user_uploaded")
+        self.assertEqual(resp.status_code, 200)
         self.assertNotIn("redshift", resp.context["form"].errors)
 
 
@@ -335,3 +643,264 @@ class ClassifyViewGateParityTests(TestCase):
         session = self._run_classify("transformer")
         self.assertNotIn("classify_dash_embedding", session)
         self.assertFalse(session.get("classify_show_templates_section"))
+
+
+class ResultSurfaceRenderingTests(TestCase):
+    """R17/R20/AE7: the tab strip and panes come from the declared list.
+
+    Per KTD5 the strip renders from the *selected* model, not the classified
+    one: today a DASH-selected page shows the DASH Twins tab before any
+    classification has run, and that must stay true. Every test here therefore
+    drives a session with a selection and no classification artifacts at all.
+    """
+
+    CLASSIFICATION_TAB = 'id="classification-tab"'
+    CLASSIFICATION_PANE = 'id="classification-pane"'
+    TWINS_TAB = 'id="twins-tab"'
+    TWINS_PANE = 'id="twins-pane"'
+
+    def _render_visible(self, model_type):
+        """GET the classify page with a model selected and nothing classified.
+
+        Args:
+            model_type: The value to place in the session as the selected model.
+
+        Returns:
+            str: The rendered HTML with ``<!-- ... -->`` comments removed.
+        """
+        session = self.client.session
+        session["selected_model_type"] = model_type
+        if model_type == "user_uploaded":
+            session["selected_model_id"] = "user-model-1"
+        session.save()
+
+        model_svc = MagicMock(
+            get_model=AsyncMock(return_value=SimpleNamespace(name="My uploaded model"))
+        )
+        with patch("astrodash.ui_views.get_model_service", return_value=model_svc):
+            resp = self.client.get(reverse("astrodash:classify"))
+        self.assertEqual(resp.status_code, 200)
+        return re.sub(r"<!--.*?-->", "", resp.content.decode(), flags=re.DOTALL)
+
+    @staticmethod
+    def _tag_with_id(html, dom_id):
+        """Return the opening tag carrying ``id="<dom_id>"``, or ``None``."""
+        match = re.search(r"<[a-z]+[^>]*\bid=\"%s\"[^>]*>" % re.escape(dom_id), html)
+        return match.group(0) if match else None
+
+    def test_dash_renders_both_tabs_in_declared_order_before_any_classification(self):
+        """AE7: DASH offers Classification then DASH Twins, pre-classification."""
+        html = self._render_visible("dash")
+        self.assertIn(self.CLASSIFICATION_TAB, html)
+        self.assertIn(self.TWINS_TAB, html)
+        self.assertIn("DASH Twins", html)
+        # Declared order: Classification first, DASH Twins second.
+        self.assertLess(html.index(self.CLASSIFICATION_TAB), html.index(self.TWINS_TAB))
+
+    def test_dash_renders_both_panes_wired_to_their_tabs(self):
+        html = self._render_visible("dash")
+        for tab, pane in (
+            (self.CLASSIFICATION_TAB, "classification-pane"),
+            (self.TWINS_TAB, "twins-pane"),
+        ):
+            with self.subTest(tab=tab):
+                anchor = self._tag_with_id(html, tab.split('"')[1])
+                self.assertIsNotNone(anchor)
+                self.assertIn(f'href="#{pane}"', anchor)
+                self.assertIn(f'aria-controls="{pane}"', anchor)
+                self.assertIsNotNone(self._tag_with_id(html, pane))
+
+    def test_first_declared_surface_is_the_active_tab_and_pane(self):
+        """R17: the first declared surface is the default, the rest are not."""
+        html = self._render_visible("dash")
+        classification_tab = self._tag_with_id(html, "classification-tab")
+        twins_tab = self._tag_with_id(html, "twins-tab")
+        self.assertIn("active", classification_tab)
+        self.assertIn('aria-selected="true"', classification_tab)
+        self.assertNotIn("active", twins_tab)
+        self.assertIn('aria-selected="false"', twins_tab)
+
+        classification_pane = self._tag_with_id(html, "classification-pane")
+        twins_pane = self._tag_with_id(html, "twins-pane")
+        self.assertIn("show active", classification_pane)
+        self.assertNotIn("show active", twins_pane)
+
+    def test_transformer_renders_only_the_classification_tab(self):
+        """AE7: Transformer declares Classification only, so no twins tab."""
+        html = self._render_visible("transformer")
+        self.assertIn(self.CLASSIFICATION_TAB, html)
+        self.assertNotIn(self.TWINS_TAB, html)
+        self.assertNotIn(self.TWINS_PANE, html)
+        self.assertNotIn("DASH Twins", html)
+        self.assertIn("show active", self._tag_with_id(html, "classification-pane"))
+
+    def test_user_uploaded_selection_renders_only_the_classification_tab(self):
+        """KTD10: an unresolvable selection falls back to Classification alone."""
+        html = self._render_visible("user_uploaded")
+        self.assertIn(self.CLASSIFICATION_TAB, html)
+        self.assertNotIn(self.TWINS_TAB, html)
+        self.assertNotIn(self.TWINS_PANE, html)
+        self.assertIn("show active", self._tag_with_id(html, "classification-pane"))
+
+    def test_classification_pane_content_still_renders(self):
+        """R21: moving the pane under the loop must not drop its markup."""
+        html = self._render_visible("dash")
+        self.assertIn('id="id_smoothing"', html)
+        self.assertIn("Input Parameters", html)
+
+
+class ClassifyTemplateLiteralGuardTests(SimpleTestCase):
+    """R20/R22: no per-model conditional survives in the classify template."""
+
+    TEMPLATE = (
+        Path(__file__).resolve().parent.parent
+        / "templates"
+        / "astrodash"
+        / "classify.html"
+    )
+
+    # A conditional comparison against a quoted built-in model id, in either
+    # order, mirroring ``test_no_model_type_literals.py``'s guard.
+    PATTERN = re.compile(
+        r"""(?:==|!=)\s*(?P<q1>['"])(?:dash|transformer|user_uploaded)(?P=q1)"""
+        r"""|(?P<q2>['"])(?:dash|transformer|user_uploaded)(?P=q2)\s*(?:==|!=)"""
+    )
+
+    def test_no_per_model_conditional_in_the_classification_template(self):
+        offenders = [
+            f"  classify.html:{lineno}: {line.strip()}"
+            for lineno, line in enumerate(
+                self.TEMPLATE.read_text(encoding="utf-8").splitlines(), start=1
+            )
+            if self.PATTERN.search(line)
+        ]
+        self.assertFalse(
+            offenders,
+            "Found per-model conditionals in the classification template. "
+            "Result surfaces render from the selected model's declared "
+            "surface list, so no tab, pane, or control may be keyed on a "
+            "model id:\n" + "\n".join(offenders),
+        )
+
+
+class TwinsSupportingRouteGuardTests(TestCase):
+    """R19/AE6: an undeclared surface's routes are unreachable, not just hidden.
+
+    KTD5 splits the authority by route. ``twins_search`` reads the embedding a
+    classification stashed, so it authorizes from the *classified* model. The
+    twins page and its data route serve a model-agnostic payload with no
+    session dependency, so they authorize from the *selected* model -- which is
+    what keeps them reachable before any classification has run, exactly as
+    today.
+    """
+
+    EMBEDDING = [0.0] * 1024
+
+    def _session(self, selected=None, classified=None, embedding=False):
+        """Seed the session with a selection, a classification, or both."""
+        session = self.client.session
+        if selected is not None:
+            session["selected_model_type"] = selected
+        if classified is not None:
+            session["classify_model_type"] = classified
+        if embedding:
+            session["classify_dash_embedding"] = list(self.EMBEDDING)
+        session.save()
+
+    @staticmethod
+    def _payload_config(tmpdir):
+        """Write a twins payload under a temp data dir and return a config."""
+        explorer = Path(tmpdir) / "explorer"
+        explorer.mkdir(parents=True, exist_ok=True)
+        (explorer / "dash_twins_payload.json").write_text(json.dumps({"points": []}))
+        return SimpleNamespace(data_dir=str(tmpdir))
+
+    @staticmethod
+    def _drain(response):
+        """Consume a streaming response without closing this test's connection.
+
+        The test client wires ``response.close`` into the streaming iterator,
+        and that close fires ``request_finished`` -> ``close_old_connections``,
+        which would tear down the connection the test's transaction runs in and
+        break every test after it. Django disconnects that receiver around
+        ``close()`` for non-streaming responses; do the same here.
+
+        Args:
+            response: The streaming response to consume.
+
+        Returns:
+            bytes: The response body.
+        """
+        request_finished.disconnect(close_old_connections)
+        try:
+            return b"".join(response.streaming_content)
+        finally:
+            request_finished.connect(close_old_connections)
+
+    # --- twins_search: authorized from the CLASSIFIED model ---
+
+    def test_twins_search_refused_after_a_transformer_classification(self):
+        """AE6: refused even though a stale embedding sits in the session."""
+        self._session(selected="transformer", classified="transformer", embedding=True)
+        svc = MagicMock()
+        with patch("astrodash.ui_views.get_twins_search_service", return_value=svc):
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 403)
+        svc.find_twins.assert_not_called()
+
+    def test_twins_search_served_after_a_dash_classification(self):
+        self._session(selected="dash", classified="dash", embedding=True)
+        svc = MagicMock(
+            find_twins=MagicMock(
+                return_value={
+                    "query_umap": [0.0, 0.0],
+                    "twin_indices": [1],
+                    "twin_similarities": [0.9],
+                }
+            )
+        )
+        with patch("astrodash.ui_views.get_twins_search_service", return_value=svc):
+            resp = self.client.get(reverse("astrodash:twins_search"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["twin_indices"], [1])
+
+    # --- twins page and data: authorized from the SELECTED model ---
+
+    def test_dash_selection_reaches_both_twins_routes_before_any_classification(self):
+        """R21: the pre-classification twins pane keeps working exactly as today."""
+        self._session(selected="dash")
+        page = self.client.get(reverse("astrodash:dash_twins"))
+        self.assertEqual(page.status_code, 200)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "astrodash.ui_views.get_config",
+                return_value=self._payload_config(tmpdir),
+            ):
+                data = self.client.get(reverse("astrodash:dash_twins_data"))
+                self.assertEqual(data.status_code, 200)
+                self.assertEqual(json.loads(self._drain(data)), {"points": []})
+
+    def test_transformer_selection_is_refused_both_twins_routes(self):
+        self._session(selected="transformer")
+        self.assertEqual(
+            self.client.get(reverse("astrodash:dash_twins")).status_code, 403
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch(
+                "astrodash.ui_views.get_config",
+                return_value=self._payload_config(tmpdir),
+            ):
+                resp = self.client.get(reverse("astrodash:dash_twins_data"))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_twins_page_is_not_gated_on_the_classified_model(self):
+        """KTD5: a DASH selection whose last run was Transformer still browses.
+
+        The page carries no classification artifact, so the classified model
+        must not decide it -- only the selection does.
+        """
+        self._session(selected="dash", classified="transformer")
+        self.assertEqual(
+            self.client.get(reverse("astrodash:dash_twins")).status_code, 200
+        )

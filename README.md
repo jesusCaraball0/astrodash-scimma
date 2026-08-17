@@ -52,6 +52,8 @@ Jetstream2 using ArgoCD for GitOps.
   deployments
 - [Contributing a Classifier](docs/guides/contributing-classifiers.md) — how
   to add a new ML model
+- [Serving a Gated Model](docs/admin/gated-model-access.md) — minting and
+  distributing a review link for a model that is not yet public
 
 ## Contributing
 

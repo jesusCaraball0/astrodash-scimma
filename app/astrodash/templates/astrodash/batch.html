@@ -67,12 +67,14 @@
                             </div>
                         </div>
                         <div class="row">
+                            {% if show_redshift_controls %}
                             <div class="col-md-4">
                                 {{ form.known_z|as_crispy_field }}
                             </div>
                             <div class="col-md-4">
                                 {{ form.redshift|as_crispy_field }}
                             </div>
+                            {% endif %}
                             <div class="col-md-4">
                                 {{ form.calculate_rlap|as_crispy_field }}
                             </div>

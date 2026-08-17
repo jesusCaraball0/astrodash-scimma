@@ -1,13 +1,46 @@
 from django.shortcuts import render
 from django.contrib import messages
-from django.http import HttpResponseRedirect, FileResponse, Http404, JsonResponse
+from django.http import (
+    HttpResponseRedirect,
+    FileResponse,
+    Http404,
+    JsonResponse,
+)
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.http import require_POST
 from django.urls import reverse
 from pathlib import Path
 from types import SimpleNamespace
 
-from astrodash.forms import ClassifyForm, BatchForm, ModelSelectionForm
-from astrodash.infrastructure.ml.model_registry import active_definitions, get_definition
+from astrodash.forms import (
+    ClassifyForm,
+    BatchForm,
+    ModelSelectionForm,
+    REDSHIFT_REQUIRED_MESSAGE,
+    redshift_input_policy,
+    takes_redshift_input,
+)
+from astrodash.infrastructure.ml.model_registry import (
+    REDSHIFT_INPUT_REQUIRED,
+    SURFACE_DASH_TWINS,
+    get_definition,
+    listed_definitions,
+)
+from astrodash.core.model_access import (
+    EntryLinkRefused,
+    GateNotConfigured,
+    begin_scope,
+    clear_selection,
+    credential_matches,
+    end_scope,
+    live_scope_model_id,
+    model_access_required,
+    redeem_entry_link,
+    render_refusal,
+    revalidate_session_model,
+    scoped_flow_refusal,
+)
+from astrodash.surfaces import declared_surfaces
 from astrodash.services import (
     get_config,
     get_spectrum_processing_service,
@@ -200,18 +233,27 @@ def leaderboard(request):
 
 
 @xframe_options_sameorigin
+@model_access_required("dash_twins")
 def dash_twins(request):
     """
     Renders the DASH Twins Explorer (embedding visualization).
     UI is in astrodash/explorer/dash_twins.html; data is loaded via dash_twins_data.
+
+    Authorized from the *selected* model per KTD5: the page shows a
+    model-agnostic global payload and reads no classification artifact, so it
+    stays browsable before any classification has run, exactly as today.
     """
     return render(request, "astrodash/explorer/dash_twins.html")
 
 
+@model_access_required("dash_twins_data", as_json=True)
 def dash_twins_data(request):
     """
     Serves the DASH Twins payload JSON from {data_dir}/explorer (same as models, templates).
     Generate with extract_payload.py --build-artifacts (optionally --out-dir to data_dir/explorer).
+
+    Authorized from the *selected* model, for the same reason as the page it
+    feeds: the payload is global and carries nothing from a classification.
     """
     path = Path(get_config().data_dir) / "explorer" / "dash_twins_payload.json"
     if not path.is_file():
@@ -224,11 +266,16 @@ def dash_twins_data(request):
     )
 
 
+@model_access_required("twins_search", from_classified=True, as_json=True)
 def twins_search(request):
     """
     POST or GET: run twins search using the DASH embedding stored in session
     (set after classifying a spectrum with DASH). Returns JSON with query_umap,
     query_pca, twin_indices, twin_similarities, and optionally user_spectrum.
+
+    Authorized from the *classified* model per KTD5: this is the one twins
+    route that consumes a classification artifact (the stashed embedding), so
+    the model that produced that artifact decides whether it may be searched.
     """
     import numpy as np
     embedding = request.session.get('classify_dash_embedding')
@@ -259,14 +306,120 @@ def twins_search(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
+# Shown when a valid, unexpired link is presented with the wrong credential.
+# Generic by design: it confirms nothing about the link, the model, or how close
+# the attempt was.
+GATE_CREDENTIAL_ERROR = "That access code was not accepted. Please try again."
+
+
+def model_gate(request, token):
+    """Redeem a model-scoped entry link and prompt for the shared credential.
+
+    The only way into a gated model. A GET renders the prompt; a POST checks the
+    submitted credential and, when it matches, establishes a session scoped to
+    the link's model. The link's deadline is re-checked on both, so a link that
+    lapses between the prompt and the submit is refused rather than honored.
+
+    Every refusal -- expired, tampered, malformed -- renders the same page with
+    the same wording, so the response discloses nothing about which models
+    exist. A link whose model has since been published redirects into the normal
+    public flow instead of refusing, so a reviewer is never locked out of a
+    model that is now public.
+
+    Args:
+        request: The current request.
+        token: The signed entry-link token from the path.
+
+    Returns:
+        HttpResponse: The credential prompt, a redirect into the classification
+        flow, or the refusal page.
+    """
+    try:
+        link = redeem_entry_link(token)
+    except EntryLinkRefused:
+        return render_refusal(request)
+    except GateNotConfigured:
+        # The route exists in every deployment, gated model or not, so a visitor
+        # can reach it while the gate is unconfigured -- which is the shipped
+        # default, since the roster carries no gated model and the startup check
+        # therefore never runs. Fail closed onto the refusal page rather than a
+        # framework error page: this may be the first thing a reviewer sees.
+        logger.error("Model gate: link presented while the gate is unconfigured")
+        return render_refusal(request)
+
+    definition = get_definition(link.model_id)
+    if definition is None or not definition.requires_credential:
+        # The model has been published (or left the registry) since the link was
+        # minted: there is nothing to gate, so the link becomes an ordinary way
+        # in rather than a refusal.
+        end_scope(request.session)
+        if definition is None:
+            return HttpResponseRedirect(
+                reverse("astrodash:model_selection") + "?action=classify"
+            )
+        request.session["selected_model_type"] = link.model_id
+        return HttpResponseRedirect(reverse("astrodash:classify"))
+
+    context = {}
+    if request.method == "POST":
+        try:
+            accepted = credential_matches(request.POST.get("credential"))
+        except GateNotConfigured:
+            logger.error("Model gate: credential submitted while the gate is unconfigured")
+            return render_refusal(request)
+        if accepted:
+            begin_scope(request.session, link)
+            logger.info("Model gate: scope established for model_type=%s", link.model_id)
+            return HttpResponseRedirect(reverse("astrodash:classify"))
+        # A wrong credential on a still-valid link is retryable: redisplay the
+        # prompt with a generic error rather than burning the link.
+        logger.warning("Model gate: credential rejected")
+        context["credential_error"] = GATE_CREDENTIAL_ERROR
+
+    return render(request, "astrodash/model_gate.html", context)
+
+
+@require_POST
+def end_model_scope(request):
+    """End a model-scoped session explicitly, discarding everything it produced.
+
+    A POST, because it changes server state; idempotent, so an unscoped visitor
+    (or a second click) simply lands back on the public picker. Navigating away
+    is deliberately not treated as an implicit end -- only this is.
+
+    Args:
+        request: The current request.
+
+    Returns:
+        HttpResponse: A redirect to the public model-selection page.
+    """
+    was_scoped = live_scope_model_id(request.session) is not None
+    end_scope(request.session)
+    if was_scoped:
+        messages.success(request, "Session ended. Choose a model to continue.")
+    return HttpResponseRedirect(
+        reverse('astrodash:model_selection') + '?action=classify'
+    )
+
+
 def model_selection(request):
     """
     Handles model selection page - allows choosing between dash/transformer or uploading a custom model.
     """
+    # A scoped session picks nothing: it is locked to one model, and its way out
+    # is the explicit end action, not this page. Refused before the POST handler
+    # so a hand-crafted selection cannot move a scope onto another model.
+    refusal = scoped_flow_refusal(request)
+    if refusal is not None:
+        return refusal
+
     action_type = request.GET.get('action', 'classify')  # 'classify' or 'batch'
-    # Active model definitions drive the selection cards (title, description,
-    # color, feature tags, icon, recommended badge, and order).
-    model_definitions = active_definitions()
+    # Listed model definitions drive the selection cards (title, description,
+    # color, feature tags, icon, recommended badge, and order). An unlisted
+    # model renders no card here, for the classify action and the batch action
+    # alike; the selection form's choices are drawn from the same listing, so
+    # a POST naming an unlisted model is refused rather than silently accepted.
+    model_definitions = listed_definitions()
     form = ModelSelectionForm(request.POST or None, request.FILES or None)
 
     # Populate existing user model options (must be done before is_valid() on POST too)
@@ -464,14 +617,55 @@ def model_selection(request):
     return render(request, 'astrodash/model_selection.html', context)
 
 
+def _build_classify_form(effective_model, data=None, files=None, initial=None):
+    """Build the classification form bound to the model that will actually run.
+
+    The effective model drives both the form's choices and its redshift policy
+    (KTD10). Without it the two disagree in a scoped session: a gated model is
+    unlisted, so its id is in no listed choice set, and the submission would
+    fail validation before the view ever consulted the scope.
+
+    Args:
+        effective_model: The model that will run -- the scoped model when a
+            scope is live, otherwise the session's selection.
+        data: Bound POST data, or ``None`` for an unbound form.
+        files: Bound files, or ``None``.
+        initial: Initial field values, or ``None``.
+
+    Returns:
+        ClassifyForm: The form, with the user-uploaded entry hidden from the
+        dropdown unless it is what was selected (it travels as a hidden input).
+    """
+    form = ClassifyForm(data, files, initial=initial, effective_model=effective_model)
+    if effective_model != 'user_uploaded':
+        form.fields['model'].choices = [
+            c for c in form.fields['model'].choices if c[0] != 'user_uploaded'
+        ]
+    return form
+
+
+@model_access_required()
 def classify(request):
     """
     Handles spectrum classification via the UI.
     """
-    # Get model selection from session (set by model_selection view)
+    # A scope whose model has been published dissolves here, and a public
+    # session whose model stopped being selectable is returned to the picker
+    # (R35), before any of it reaches a classification.
+    stale = revalidate_session_model(request, action='classify')
+    if stale is not None:
+        return stale
+
+    # The model that will actually run: the scope first, then the session's
+    # selection (KTD10). Inside a scope the selection cannot influence which
+    # model executes, so a stale user-model id is dropped with it.
+    scoped_model_type = live_scope_model_id(request.session)
     selected_model_type = request.session.get('selected_model_type')
     selected_model_id = request.session.get('selected_model_id') or None
     if selected_model_id == '':
+        selected_model_id = None
+    if scoped_model_type is not None:
+        selected_model_type = scoped_model_type
         selected_model_id = None
 
     # If no model selected, redirect to model selection
@@ -480,8 +674,7 @@ def classify(request):
 
     # User chose "Use uploaded model" but no id in session → redirect to re-pick
     if selected_model_type == 'user_uploaded' and not selected_model_id:
-        request.session.pop('selected_model_type', None)
-        request.session.pop('selected_model_id', None)
+        clear_selection(request.session)
         messages.warning(request, "Please select an uploaded model again.")
         return HttpResponseRedirect(reverse('astrodash:model_selection') + '?action=classify')
 
@@ -508,16 +701,7 @@ def classify(request):
                 # If cached file restore fails, continue with original request files.
                 form_files = request.FILES or None
 
-    form = ClassifyForm(request.POST or None, form_files)
-    # Set the model from session (for validation and display)
-    form.fields['model'].initial = (
-        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
-    )
-    # When showing the dropdown, only offer dash/transformer; user_uploaded is sent via hidden input
-    if selected_model_type != 'user_uploaded':
-        form.fields['model'].choices = [
-            c for c in form.fields['model'].choices if c[0] != 'user_uploaded'
-        ]
+    form = _build_classify_form(selected_model_type, request.POST or None, form_files)
     # Display label for "Model Used" when a user model is selected
     selected_model_display = None
     if selected_model_type == 'user_uploaded' and selected_model_id:
@@ -527,11 +711,30 @@ def classify(request):
             selected_model_display = (um.name or "").strip() or selected_model_id
         except Exception:
             selected_model_display = "User uploaded model"
+    # In a scoped session the model control is not a choice: it renders
+    # disabled, naming the one model the scope allows.
+    scoped_model_display = None
+    if scoped_model_type is not None:
+        scoped_definition = get_definition(scoped_model_type)
+        scoped_model_display = (
+            scoped_definition.title if scoped_definition else scoped_model_type
+        )
+    # Result surfaces (the tab strip and its panes) come from the *selected*
+    # model's declared list per KTD5, so a fresh page load already shows every
+    # tab the chosen model offers, before any classification has run.
+    result_surfaces = declared_surfaces(selected_model_type)
     context = {
         'form': form,
         'selected_model_type': selected_model_type,
         'selected_model_id': selected_model_id,
         'selected_model_display': selected_model_display,
+        'scoped_model_type': scoped_model_type,
+        'scoped_model_display': scoped_model_display,
+        'result_surfaces': result_surfaces,
+        'result_surface_ids': tuple(surface.id for surface in result_surfaces),
+        # Whether the model that will actually run takes a redshift as an input;
+        # a model that declines it renders neither redshift control.
+        'show_redshift_controls': takes_redshift_input(selected_model_type),
         'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
     }
 
@@ -612,15 +815,9 @@ def classify(request):
                 })
                 last_params = request.session.get('classify_last_params') or {}
                 if last_params:
-                    overlay_form = ClassifyForm(initial=last_params)
-                    overlay_form.fields['model'].initial = (
-                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
+                    context['form'] = _build_classify_form(
+                        selected_model_type, initial=last_params
                     )
-                    if selected_model_type != 'user_uploaded':
-                        overlay_form.fields['model'].choices = [
-                            c for c in overlay_form.fields['model'].choices if c[0] != 'user_uploaded'
-                        ]
-                    context['form'] = overlay_form
                 return render(request, 'astrodash/classify.html', context)
             # Fall through to normal render if no overlays or restore failed
 
@@ -736,8 +933,10 @@ def classify(request):
                 _annotate_best_match_template_variant_counts(formatted_results, show_templates_section)
 
                 # Store the embedding in session for "Find Twins" only when the
-                # model supports twins and the embedding is present.
-                if (classified_def is not None and classified_def.supports_twins
+                # classified model declares the twins surface (the declared
+                # list is the sole authority, R31) and the embedding is present.
+                if (classified_def is not None
+                        and SURFACE_DASH_TWINS in classified_def.surfaces
                         and isinstance(classification.results.get('embedding'), list)
                         and len(classification.results['embedding']) == 1024):
                     request.session['classify_dash_embedding'] = classification.results['embedding']
@@ -817,17 +1016,12 @@ def classify(request):
                     'persisted_file_name': (request.session.get('classify_uploaded_file') or {}).get('name'),
                 })
                 if source_changed:
-                    replacement_form = ClassifyForm(
-                        initial={'supernova_name': supernova_name} if supernova_name else None
+                    context['form'] = _build_classify_form(
+                        selected_model_type,
+                        initial=(
+                            {'supernova_name': supernova_name} if supernova_name else None
+                        ),
                     )
-                    replacement_form.fields['model'].initial = (
-                        'user_uploaded' if selected_model_type == 'user_uploaded' else selected_model_type
-                    )
-                    if selected_model_type != 'user_uploaded':
-                        replacement_form.fields['model'].choices = [
-                            c for c in replacement_form.fields['model'].choices if c[0] != 'user_uploaded'
-                        ]
-                    context['form'] = replacement_form
 
             except AppException as e:
                 messages.error(request, f"Processing Error: {e.message}")
@@ -846,6 +1040,15 @@ def batch_process(request):
     Handles batch processing UI.
     Support for both ZIP file uploads and multiple individual file uploads.
     """
+    # A scoped session reaches classification only (R24), and a session whose
+    # model stopped being selectable is returned to the picker (R35).
+    refusal = scoped_flow_refusal(request)
+    if refusal is not None:
+        return refusal
+    stale = revalidate_session_model(request, action='batch')
+    if stale is not None:
+        return stale
+
     # Get model selection from session (set by model_selection view)
     selected_model_type = request.session.get('selected_model_type')
     selected_model_id = request.session.get('selected_model_id', None)
@@ -855,7 +1058,12 @@ def batch_process(request):
         return HttpResponseRedirect(reverse('astrodash:model_selection') + '?action=batch')
 
     form = BatchForm(request.POST or None, request.FILES or None)
-    context = {'form': form}
+    context = {
+        'form': form,
+        # Same policy the classification flow renders on: a model that takes no
+        # redshift shows neither redshift control here either.
+        'show_redshift_controls': takes_redshift_input(selected_model_type),
+    }
 
     if request.method == 'POST':
         logger.info(
@@ -869,12 +1077,12 @@ def batch_process(request):
         files = request.FILES.getlist('files')
 
         if form.is_valid():
-            # Models whose definition requires a redshift (Transformer today)
-            # need one when known_z is not set.
-            batch_def = get_definition(selected_model_type)
-            if (batch_def is not None and batch_def.requires_redshift
+            # This gate is the batch flow's own, separate from the classify
+            # form's, but reads the same declared policy: only a model whose
+            # definition requires a redshift is refused for missing one.
+            if (redshift_input_policy(selected_model_type) == REDSHIFT_INPUT_REQUIRED
                     and form.cleaned_data.get('redshift') is None):
-                form.add_error('redshift', "Redshift is required for Transformer model.")
+                form.add_error('redshift', REDSHIFT_REQUIRED_MESSAGE)
             else:
                 try:
                     model_type = selected_model_type

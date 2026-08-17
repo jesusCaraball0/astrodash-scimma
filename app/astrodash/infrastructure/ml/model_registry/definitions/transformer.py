@@ -4,7 +4,9 @@ from astrodash.infrastructure.ml.classifiers.transformer_classifier import (
     TransformerClassifier,
 )
 from astrodash.infrastructure.ml.model_registry._model_definition import (
+    REDSHIFT_INPUT_REQUIRED,
     STATUS_ACTIVE,
+    SURFACE_CLASSIFICATION,
     ModelDefinition,
 )
 
@@ -17,10 +19,12 @@ TRANSFORMER = ModelDefinition(
     icon=None,
     recommended=False,
     status=STATUS_ACTIVE,
+    listed=True,
     is_default=True,
-    requires_redshift=True,
+    requires_credential=False,
+    redshift_input=REDSHIFT_INPUT_REQUIRED,
     preprocessing="transformer",
-    supports_twins=False,
+    surfaces=(SURFACE_CLASSIFICATION,),
     supports_redshift_estimation=False,
     supports_template_overlays=False,
     supports_rlap=False,

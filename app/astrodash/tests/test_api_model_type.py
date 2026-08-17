@@ -26,6 +26,51 @@ from django.urls import reverse
 from astrodash.infrastructure.ml import model_registry
 
 
+def _gated_roster():
+    """Roster where DASH is gated: active, unlisted, credential-required.
+
+    Transformer is left untouched so it remains the listed, ungated active
+    default the registry invariants require.
+
+    Returns:
+        A ``MODELS``-shaped tuple suitable for ``patch.object``.
+    """
+    transformer = model_registry.get_definition("transformer")
+    dash = model_registry.get_definition("dash")
+    return (transformer, replace(dash, listed=False, requires_credential=True))
+
+
+def _absent_roster():
+    """Roster from which DASH is missing entirely, so its id is unknown.
+
+    Returns:
+        A ``MODELS``-shaped tuple containing only Transformer.
+    """
+    return (model_registry.get_definition("transformer"),)
+
+
+def _retired_roster():
+    """Roster where DASH is retired but still resolvable by id.
+
+    Returns:
+        A ``MODELS``-shaped tuple suitable for ``patch.object``.
+    """
+    transformer = model_registry.get_definition("transformer")
+    dash = model_registry.get_definition("dash")
+    return (transformer, replace(dash, status=model_registry.STATUS_RETIRED))
+
+
+def _unlisted_ungated_roster():
+    """Roster where DASH is active and ungated but not listed.
+
+    Returns:
+        A ``MODELS``-shaped tuple suitable for ``patch.object``.
+    """
+    transformer = model_registry.get_definition("transformer")
+    dash = model_registry.get_definition("dash")
+    return (transformer, replace(dash, listed=False))
+
+
 def _mock_classification(model_type):
     """Build a fake classification result the classify payload can serialize."""
     fake_processed = MagicMock()
@@ -132,6 +177,56 @@ class ClassifyModelTypeContractTests(SimpleTestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.json()["detail"], "Unknown model type: user_uploaded.")
 
+    # --- gated models (R25 / AE9) ---
+
+    def test_gated_model_type_returns_400(self):
+        """AE9: a credential-gated model is refused even with writes enabled."""
+        spectrum_svc, processing_svc, classification_svc = _mock_classification("dash")
+        with patch.object(model_registry, "MODELS", _gated_roster()), patch(
+            "astrodash.views.API_WRITES_ENABLED", True
+        ), patch(
+            "astrodash.views.get_classification_service",
+            return_value=classification_svc,
+        ):
+            resp = self.client.post(self.url, data={"params": '{"modelType": "dash"}'})
+        self.assertEqual(resp.status_code, 400)
+        classification_svc.classify_spectrum.assert_not_called()
+
+    def test_gated_rejection_is_indistinguishable_from_unknown(self):
+        """AE9: gated and unknown refusals match; retired stays distinct.
+
+        All three requests name the same id, so a caller cannot use the
+        endpoint to learn whether an unreleased model exists.
+        """
+        params = '{"modelType": "dash"}'
+        with patch.object(model_registry, "MODELS", _gated_roster()):
+            gated = self._post(data={"params": params})
+        with patch.object(model_registry, "MODELS", _absent_roster()):
+            unknown = self._post(data={"params": params})
+        with patch.object(model_registry, "MODELS", _retired_roster()):
+            retired = self._post(data={"params": params})
+
+        self.assertEqual(gated.status_code, unknown.status_code)
+        self.assertEqual(gated.content, unknown.content)
+        self.assertNotEqual(gated.content, retired.content)
+        self.assertEqual(retired.status_code, 400)
+        self.assertEqual(retired.json()["detail"], "Model type dash is not available.")
+
+    def test_unlisted_ungated_model_remains_resolvable(self):
+        """R27: listing is presentation, so an ungated unlisted model still runs."""
+        with patch.object(model_registry, "MODELS", _unlisted_ungated_roster()):
+            resp, classification_svc = self._post_with_services(
+                {
+                    "params": '{"modelType": "dash"}',
+                    "_expected_model_type": "dash",
+                }
+            )
+        self.assertEqual(resp.status_code, 200)
+        classification_svc.classify_spectrum.assert_called_once()
+        self.assertEqual(
+            classification_svc.classify_spectrum.call_args.kwargs["model_type"], "dash"
+        )
+
     # --- unchanged paths (parity) ---
 
     def test_valid_transformer_classifies_as_today(self):
@@ -228,6 +323,35 @@ class BatchModelTypeContractTests(SimpleTestCase):
             resp.json()["detail"], "Model type transformer is not available."
         )
         batch_svc.process_batch.assert_not_called()
+
+    def test_gated_model_type_returns_400(self):
+        """AE9: the batch endpoint refuses a gated model too."""
+        with patch.object(model_registry, "MODELS", _gated_roster()):
+            resp, batch_svc = self._post(params='{"modelType": "dash"}')
+        self.assertEqual(resp.status_code, 400)
+        batch_svc.process_batch.assert_not_called()
+
+    def test_gated_rejection_is_indistinguishable_from_unknown(self):
+        """AE9: gated and unknown refusals match on the batch endpoint too."""
+        params = '{"modelType": "dash"}'
+        with patch.object(model_registry, "MODELS", _gated_roster()):
+            gated, _ = self._post(params=params)
+        with patch.object(model_registry, "MODELS", _absent_roster()):
+            unknown, _ = self._post(params=params)
+        with patch.object(model_registry, "MODELS", _retired_roster()):
+            retired, _ = self._post(params=params)
+
+        self.assertEqual(gated.status_code, unknown.status_code)
+        self.assertEqual(gated.content, unknown.content)
+        self.assertNotEqual(gated.content, retired.content)
+
+    def test_unlisted_ungated_model_remains_resolvable(self):
+        """R27: an unlisted but ungated model still reaches the batch service."""
+        with patch.object(model_registry, "MODELS", _unlisted_ungated_roster()):
+            resp, batch_svc = self._post(params='{"modelType": "dash"}')
+        self.assertEqual(resp.status_code, 200)
+        batch_svc.process_batch.assert_called_once()
+        self.assertEqual(batch_svc.process_batch.call_args.args[2], "dash")
 
     def test_valid_dash_reaches_batch_service(self):
         resp, batch_svc = self._post(params='{"modelType": "dash"}')
