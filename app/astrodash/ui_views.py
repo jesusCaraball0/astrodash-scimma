@@ -116,6 +116,89 @@ def team_members(request):
     )
 
 
+def leaderboard(request):
+    """
+    Renders the Model Leaderboard page (UI sketch with mock rankings).
+
+    Models are ranked on a monthly blind set of newly uploaded spectra.
+    Backend evaluation is not wired yet — this view serves placeholder data
+    so the layout can be reviewed.
+    """
+    challenge = {
+        "month_label": "July 2026",
+        "status": "Finalized",
+        "spectra_count": 142,
+        "eval_window": "Jul 1 – Jul 31, 2026",
+        "next_challenge": "August 2026",
+        "blind_set_note": "Models scored on spectra newly uploaded to WISeREP during the eval window.",
+    }
+    available_months = [
+        "July 2026",
+        "June 2026",
+        "May 2026",
+        "April 2026",
+    ]
+    # Mock standings — mix of built-in models and placeholder community entries.
+    rankings = [
+        {
+            "rank": 1,
+            "model": "Dash Model",
+            "color": "#28a745",
+            "micro_f1": 0.912,
+            "roc": 0.964,
+            "accuracy": 91.2,
+            "delta": 1.4,
+        },
+        {
+            "rank": 2,
+            "model": "Transformer Model",
+            "color": "#ff8c00",
+            "micro_f1": 0.887,
+            "roc": 0.951,
+            "accuracy": 88.7,
+            "delta": -0.6,
+        },
+        {
+            "rank": 3,
+            "model": "SNNet-v2 (community)",
+            "color": "#6f42c1",
+            "micro_f1": 0.863,
+            "roc": 0.938,
+            "accuracy": 86.3,
+            "delta": 2.1,
+        },
+        {
+            "rank": 4,
+            "model": "SpecFormer-lite",
+            "color": "#17a2b8",
+            "micro_f1": 0.839,
+            "roc": 0.921,
+            "accuracy": 83.9,
+            "delta": 0.3,
+        },
+        {
+            "rank": 5,
+            "model": "CNN-baseline-2024",
+            "color": "#6c757d",
+            "micro_f1": 0.794,
+            "roc": 0.887,
+            "accuracy": 79.4,
+            "delta": -1.8,
+        },
+    ]
+    return render(
+        request,
+        "astrodash/leaderboard.html",
+        {
+            "challenge": challenge,
+            "available_months": available_months,
+            "selected_month": challenge["month_label"],
+            "rankings": rankings,
+            "is_mock": True,
+        },
+    )
+
+
 @xframe_options_sameorigin
 def dash_twins(request):
     """
