@@ -18,6 +18,8 @@ The script:
   * downloads only the matching ASCII spectrum files;
   * uses stable filenames based on IAU name + WISeREP spectrum ID;
   * is idempotent and can append multiple monthly runs into the same OUTPUT;
+  * rejects a spectrum whose residual vs any already-kept spectrum is 0
+    (identical wavelength and flux samples; typically a repeat upload);
   * keeps no raw export or temporary duplicate dataset.
 
 Dependencies:
@@ -38,6 +40,7 @@ import hashlib
 import html as html_lib
 import io
 import re
+import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -1021,6 +1024,99 @@ def download_ascii(
     raise RuntimeError(f"Failed to download {url}: {last_error}")
 
 
+def parse_ascii_spectrum(path: Path) -> tuple[list[float], list[float]] | None:
+    """
+    Parse wavelength and flux from an ASCII spectrum, ignoring comments/headers.
+
+    Returns None when fewer than two numeric rows can be read.
+    """
+    waves: list[float] = []
+    fluxes: list[float] = []
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";", "*", "//")):
+            continue
+
+        parts = re.split(r"[\s,]+", line)
+        if len(parts) < 2:
+            continue
+        try:
+            waves.append(float(parts[0]))
+            fluxes.append(float(parts[1]))
+        except ValueError:
+            continue
+
+    if len(waves) < 2:
+        return None
+    return waves, fluxes
+
+
+def spectra_residual(
+    wave_a: list[float],
+    flux_a: list[float],
+    wave_b: list[float],
+    flux_b: list[float],
+) -> float:
+    """
+    L1 residual between two parsed spectra.
+
+    Residual is 0 iff wavelength and flux samples are identical. Spectra on
+    different wavelength grids are treated as distinct (infinite residual).
+    """
+    if len(wave_a) != len(wave_b) or len(flux_a) != len(flux_b):
+        return float("inf")
+    if any(wa != wb for wa, wb in zip(wave_a, wave_b)):
+        return float("inf")
+    return sum(abs(fa - fb) for fa, fb in zip(flux_a, flux_b))
+
+
+def spectrum_identity_key(wave: list[float], flux: list[float]) -> bytes:
+    """Stable key for residual-0 identity (exact wavelength and flux samples)."""
+    packed = struct.pack("<" + "d" * len(wave), *wave) + struct.pack(
+        "<" + "d" * len(flux), *flux
+    )
+    return hashlib.sha1(packed).digest()
+
+
+def index_existing_spectrum_identities(
+    spectra_dir: Path,
+    *,
+    verbose: bool,
+) -> dict[bytes, str]:
+    """Map residual-0 identity -> first filename already present on disk."""
+    accepted: dict[bytes, str] = {}
+    if not spectra_dir.is_dir():
+        return accepted
+
+    for path in sorted(p for p in spectra_dir.iterdir() if p.is_file()):
+        parsed = parse_ascii_spectrum(path)
+        if parsed is None:
+            continue
+        key = spectrum_identity_key(*parsed)
+        if key in accepted:
+            if verbose:
+                print(
+                    f"[dedupe] {path.name} already represented by {accepted[key]}"
+                )
+            continue
+        accepted[key] = path.name
+    return accepted
+
+
+def release_identity_for_filename(
+    accepted_identities: dict[bytes, str], filename: str
+) -> None:
+    stale = [key for key, owner in accepted_identities.items() if owner == filename]
+    for key in stale:
+        del accepted_identities[key]
+
+
 def read_existing_metadata(path: Path) -> dict[str, dict[str, str]]:
     if not path.exists():
         return {}
@@ -1099,6 +1195,9 @@ def main() -> int:
 
     existing = read_existing_metadata(metadata_path)
     metadata = dict(existing)
+    accepted_identities = index_existing_spectrum_identities(
+        spectra_dir, verbose=args.verbose
+    )
 
     object_cache: dict[tuple[str, str], ObjectPage] = {}
     links_cache: dict[tuple[str, str], list[AsciiLink]] = {}
@@ -1107,6 +1206,7 @@ def main() -> int:
     already_present = 0
     skipped_non_sn = 0
     skipped_missing_link = 0
+    skipped_duplicate = 0
     failed = 0
 
     for idx, candidate in enumerate(candidates, start=1):
@@ -1168,6 +1268,9 @@ def main() -> int:
             if destination.exists() and not args.overwrite:
                 already_present += 1
             else:
+                if args.overwrite and destination.exists():
+                    release_identity_for_filename(accepted_identities, filename)
+
                 download_ascii(
                     session,
                     link.url,
@@ -1175,6 +1278,31 @@ def main() -> int:
                     timeout=args.timeout,
                     delay=args.delay,
                 )
+
+                parsed = parse_ascii_spectrum(destination)
+                if parsed is not None:
+                    wave, flux = parsed
+                    ident = spectrum_identity_key(wave, flux)
+                    owner = accepted_identities.get(ident)
+                    if owner is not None and owner != filename:
+                        owner_parsed = parse_ascii_spectrum(spectra_dir / owner)
+                        residual = (
+                            spectra_residual(wave, flux, *owner_parsed)
+                            if owner_parsed is not None
+                            else float("inf")
+                        )
+                        if residual == 0:
+                            destination.unlink(missing_ok=True)
+                            metadata.pop(filename, None)
+                            skipped_duplicate += 1
+                            print(
+                                f"[{idx}/{len(candidates)}] skip duplicate "
+                                f"{candidate.iau} SpecID={candidate.spec_id or '?'} "
+                                f"(residual=0 vs {owner})"
+                            )
+                            continue
+                    accepted_identities[ident] = filename
+
                 saved += 1
 
             # Only add metadata after the physical file exists.
@@ -1206,6 +1334,7 @@ def main() -> int:
     print(f"  Newly downloaded:       {saved}")
     print(f"  Already present:        {already_present}")
     print(f"  Skipped non-SN:         {skipped_non_sn}")
+    print(f"  Skipped duplicates:     {skipped_duplicate}")
     print(f"  Missing ASCII match:    {skipped_missing_link}")
     print(f"  Failed:                 {failed}")
     print(f"  Total metadata rows:    {len(metadata)}")
