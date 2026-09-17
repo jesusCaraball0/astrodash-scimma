@@ -14,6 +14,7 @@ metadata.csv columns:
 The script:
   * searches WISeREP's *spectra* search, not object search;
   * filters by spectrum Creation Date (UT), not observation date;
+  * accepts WISeREP's format=csv response even when it is a zip of wiserep_spectra.csv;
   * keeps public SN/SLSN spectra only;
   * downloads only the matching ASCII spectrum files;
   * uses stable filenames based on IAU name + WISeREP spectrum ID;
@@ -29,7 +30,7 @@ Example:
     python wiserep_monthly_scrape.py \
         --start 2026-07-01 \
         --end 2026-07-31 \
-        --output ./wiserep_data
+        --output ./data/2026-07
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, quote, unquote, urljoin, urlparse
+import zipfile
 
 import requests
 from bs4 import BeautifulSoup
@@ -302,16 +304,56 @@ def parse_csv_rows(text: str) -> list[dict[str, str]]:
     ]
 
 
+def is_zip_payload(content: bytes, content_type: str = "") -> bool:
+    if content.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return True
+    return "zip" in compact(content_type).lower()
+
+
+def extract_csv_text_from_zip(content: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        names = archive.namelist()
+        csv_names = [name for name in names if name.lower().endswith(".csv")]
+        if not csv_names:
+            raise RuntimeError(
+                f"WISeREP zip export contained no CSV file (members={names})"
+            )
+        preferred = next(
+            (
+                name
+                for name in csv_names
+                if Path(name).name.lower() == "wiserep_spectra.csv"
+            ),
+            csv_names[0],
+        )
+        return archive.read(preferred).decode("utf-8-sig")
+
+
+def table_header_row(table):
+    thead = table.find("thead")
+    if thead:
+        header_row = thead.find("tr")
+        if header_row is not None:
+            return header_row
+    return table.find("tr")
+
+
 def parse_html_table_rows(text: str) -> list[dict[str, str]]:
     """
     Fallback parser if WISeREP returns HTML rather than CSV.
 
     Finds the table whose headers contain Spec. ID and Creation Date.
+    Nested tables inside spectrum rows are ignored so their extra <th>/<td>
+    cells do not inflate the header count.
     """
     soup = BeautifulSoup(text, "html.parser")
 
     for table in soup.find_all("table"):
-        header_cells = table.find_all("th")
+        header_row = table_header_row(table)
+        if header_row is None:
+            continue
+
+        header_cells = header_row.find_all("th", recursive=False)
         headers = [compact(th.get_text(" ", strip=True)) for th in header_cells]
         norm_headers = [normalize_col(h) for h in headers]
 
@@ -324,7 +366,7 @@ def parse_html_table_rows(text: str) -> list[dict[str, str]]:
 
         rows: list[dict[str, str]] = []
         for tr in table.find_all("tr"):
-            cells = tr.find_all("td")
+            cells = tr.find_all("td", recursive=False)
             if not cells:
                 continue
 
@@ -543,6 +585,8 @@ def fetch_search_page(
         session, SEARCH_URL, timeout=timeout, delay=delay, params=query
     )
 
+    content_type = compact(response.headers.get("content-type", ""))
+    payload = response.content
     prefix = response.text.lstrip()[:500].lower()
     looks_html = (
         prefix.startswith("<!doctype")
@@ -550,20 +594,36 @@ def fetch_search_page(
         or "<html" in prefix
     )
 
-    # CSV is the preferred documented metadata export. If WISeREP returns its
-    # HTML UI despite format=csv, parse the result table instead.
-    if looks_html:
+    source = "csv"
+    # WISeREP currently serves format=csv as a zip containing wiserep_spectra.csv.
+    if is_zip_payload(payload, content_type):
+        rows = parse_csv_rows(extract_csv_text_from_zip(payload))
+        source = "zip-csv"
+    elif looks_html:
         rows = parse_html_table_rows(response.text)
+        source = "html"
     else:
         rows = parse_csv_rows(response.text)
+
+    creation_aliases = (
+        "Creation Date (UT)",
+        "Creation Date",
+        "Creation date (UT)",
+        "Creation date",
+    )
 
     # Some deployments may return CSV with a reduced display-column set. If the
     # creation date is absent, retry the same page as HTML before giving up.
     if rows and not find_column(
         rows[0].keys(),
-        ("Creation Date (UT)", "Creation Date", "Creation date (UT)", "Creation date"),
+        creation_aliases,
         ("creation", "date"),
     ):
+        if verbose:
+            print(
+                f"[search] missing Creation Date in {source} columns="
+                f"{list(rows[0].keys())}"
+            )
         html_query = [(k, v) for k, v in query if k != "format"]
         html_query.append(("format", "html"))
         html_response = request(
@@ -573,9 +633,13 @@ def fetch_search_page(
         if html_rows:
             rows = html_rows
             response = html_response
+            source = "html"
 
     if verbose:
-        print(f"[search] page={page} rows={len(rows)} url={response.url}")
+        print(
+            f"[search] page={page} rows={len(rows)} source={source} "
+            f"content_type={content_type or '-'} url={response.url}"
+        )
 
     return rows
 

@@ -153,3 +153,7 @@ CLAUDE.md
 # Astrodash local
 app/astrodash/explorer/dash_twinsfromspace.html
 astrodash-logs/
+
+# Monthly WISeREP challenge spectra (metadata.csv stays tracked)
+app/wiserep_scrape/data/*/spectra/
+wiserep_data/
