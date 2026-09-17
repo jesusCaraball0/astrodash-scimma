@@ -56,10 +56,15 @@ def classification_from_logits(
             }
         )
     best_match = matches[0] if matches else {}
+    class_probabilities = {
+        idx_to_label.get(int(idx), f"unknown_class_{idx}"): float(probs[idx])
+        for idx in range(len(probs))
+    }
     return {
         "best_matches": matches,
         "best_match": best_match,
         "reliable_matches": best_match.get("reliable", False) if best_match else False,
+        "class_probabilities": class_probabilities,
     }
 
 
