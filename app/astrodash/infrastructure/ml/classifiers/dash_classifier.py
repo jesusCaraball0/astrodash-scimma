@@ -248,12 +248,20 @@ class DashClassifier(BaseClassifier):
             best_match['rlap'] = None
             best_match['rlap_warning'] = False
 
+        class_probabilities = {}
+        for match in matches:
+            sn_type = match["type"]
+            class_probabilities[sn_type] = class_probabilities.get(sn_type, 0.0) + float(
+                match["probability"]
+            )
+
         # Return only top 3 matches for display, but use all for probability calculation
         result = {
             'best_matches': matches[:3],  # Only return top 3 for display
             'best_match': best_match,
             'reliable_matches': reliable_flag,
             'embedding': embedding_np.tolist(),
+            'class_probabilities': class_probabilities,
         }
 
         return result

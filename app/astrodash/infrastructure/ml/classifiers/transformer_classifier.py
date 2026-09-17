@@ -121,10 +121,15 @@ class TransformerClassifier(BaseClassifier):
 
             logger.debug(f"Classification results - best match: {best_match}")
 
+            class_probabilities = {
+                self.idx_to_label.get(idx, f"unknown_class_{idx}"): float(probs[idx])
+                for idx in range(len(probs))
+            }
             return {
                 'best_matches': matches,
                 'best_match': best_match,
-                'reliable_matches': best_match.get('reliable', False) if best_match else False
+                'reliable_matches': best_match.get('reliable', False) if best_match else False,
+                'class_probabilities': class_probabilities,
             }
 
         except Exception as e:

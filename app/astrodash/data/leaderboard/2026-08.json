@@ -1,0 +1,64 @@
+{
+  "dataset_dir": "/app/wiserep_scrape/data/2026-08",
+  "eval_window": "Aug 1 \u2013 Aug 31, 2026",
+  "models": [
+    {
+      "accuracy": 70.9,
+      "id": "transformer",
+      "n_scored": 175,
+      "precision": 0.1467455621301775,
+      "recall": 0.19224806201550387,
+      "roc": null,
+      "skipped": 0
+    },
+    {
+      "accuracy": 74.0,
+      "id": "dash",
+      "n_scored": 173,
+      "precision": 0.36211404101870637,
+      "recall": 0.4234870641169854,
+      "roc": 0.8205216121100408,
+      "skipped": 2
+    },
+    {
+      "accuracy": 79.8,
+      "id": "1dCNN_z",
+      "n_scored": 173,
+      "precision": 0.5956344593173237,
+      "recall": 0.7282114735658043,
+      "roc": 0.9494206935101419,
+      "skipped": 2
+    },
+    {
+      "accuracy": 58.4,
+      "id": "1dCNN_noz",
+      "n_scored": 173,
+      "precision": 0.4060657596371883,
+      "recall": 0.4822872140982377,
+      "roc": 0.843573381527959,
+      "skipped": 2
+    },
+    {
+      "accuracy": 78.9,
+      "id": "latent_z",
+      "n_scored": 175,
+      "precision": 0.5413614667050621,
+      "recall": 0.6819601328903654,
+      "roc": 0.9316954136906961,
+      "skipped": 0
+    },
+    {
+      "accuracy": 68.0,
+      "id": "latent_noz",
+      "n_scored": 175,
+      "precision": 0.4975920532556688,
+      "recall": 0.7332225913621262,
+      "roc": 0.9220580214251743,
+      "skipped": 0
+    }
+  ],
+  "month": "2026-08",
+  "month_label": "August 2026",
+  "spectra_count": 175,
+  "status": "Finalized"
+}

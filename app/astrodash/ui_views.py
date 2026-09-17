@@ -26,6 +26,7 @@ from astrodash.infrastructure.ml.model_registry import (
     get_definition,
     listed_definitions,
 )
+from astrodash.infrastructure.ml.leaderboard.page import build_leaderboard_context
 from astrodash.core.model_access import (
     EntryLinkRefused,
     GateNotConfigured,
@@ -146,6 +147,21 @@ def team_members(request):
         request,
         "astrodash/team_members.html",
         {"affiliations": affiliations},
+    )
+
+
+def leaderboard(request):
+    """Render standings for listed models on the monthly WISeREP challenge.
+
+    Rankings come from ``astrodash/data/leaderboard/<YYYY-MM>.json`` produced
+    by ``wiserep_scrape/evaluate_leaderboard.py``. Titles and colors come from
+    the model registry. Until a score file exists the listed models still
+    appear, with metrics pending.
+    """
+    return render(
+        request,
+        "astrodash/leaderboard.html",
+        build_leaderboard_context(request.GET.get("month")),
     )
 
 
