@@ -105,6 +105,9 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "silk.middleware.SilkyMiddleware",  # Django Silk profiler (https://github.com/jazzband/django-silk)
+    # Keeps the REST API's JSON error contract when ASTRODASH_* settings fail
+    # to load; see astrodash/middleware.py.
+    "astrodash.middleware.ConfigurationErrorMiddleware",
 ]
 
 ROOT_URLCONF = "astrodash_project.urls"
