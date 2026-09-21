@@ -62,63 +62,25 @@ class Settings(BaseSettings):
     transformer_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/transformer/TF_wiserep_v6.pt",
                                         env="ASTRODASH_TRANSFORMER_MODEL_PATH")
 
-    # website_final 1D CNN / latent (local astrodash-web paths for host runserver + compose binds)
-    oned_cnn_z_model_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/dash_z/model.pth",
-        env="ASTRODASH_1DCNN_Z_MODEL_PATH",
-    )
-    oned_cnn_z_class_mapping_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/dash_z/class_mapping.json",
-        env="ASTRODASH_1DCNN_Z_CLASS_MAPPING_PATH",
-    )
-    oned_cnn_z_training_config_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/dash_z/training_config.json",
-        env="ASTRODASH_1DCNN_Z_TRAINING_CONFIG_PATH",
-    )
-    oned_cnn_noz_model_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/dash_noz/model.pth",
-        env="ASTRODASH_1DCNN_NOZ_MODEL_PATH",
-    )
-    oned_cnn_noz_class_mapping_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/dash_noz/class_mapping.json",
-        env="ASTRODASH_1DCNN_NOZ_CLASS_MAPPING_PATH",
-    )
-    oned_cnn_noz_training_config_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/dash_noz/training_config.json",
-        env="ASTRODASH_1DCNN_NOZ_TRAINING_CONFIG_PATH",
-    )
-    latent_z_encoder_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/wiserep_henna/try_5/Dered36_5/best_ckpt.pt",
-        env="ASTRODASH_LATENT_Z_ENCODER_PATH",
-    )
-    latent_z_encoder_cfg_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/wiserep_henna/try_5/Dered36_5/cfg_used.json",
-        env="ASTRODASH_LATENT_Z_ENCODER_CFG_PATH",
-    )
-    latent_z_classifier_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/latent_z/classifier_best.pt",
-        env="ASTRODASH_LATENT_Z_CLASSIFIER_PATH",
-    )
-    latent_z_classifier_cfg_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/latent_z/cfg_used.json",
-        env="ASTRODASH_LATENT_Z_CLASSIFIER_CFG_PATH",
-    )
-    latent_noz_encoder_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/wiserep_henna/try_5_noz/Nodered36_5/best_ckpt.pt",
-        env="ASTRODASH_LATENT_NOZ_ENCODER_PATH",
-    )
-    latent_noz_encoder_cfg_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/wiserep_henna/try_5_noz/Nodered36_5/cfg_used.json",
-        env="ASTRODASH_LATENT_NOZ_ENCODER_CFG_PATH",
-    )
-    latent_noz_classifier_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/latent_noz/classifier_best.pt",
-        env="ASTRODASH_LATENT_NOZ_CLASSIFIER_PATH",
-    )
-    latent_noz_classifier_cfg_path: str = Field(
-        "/Users/jesuscaraball0/code/personal_code/astrodash-web/data/pre_trained_models/website_final/latent_noz/cfg_used.json",
-        env="ASTRODASH_LATENT_NOZ_CLASSIFIER_CFG_PATH",
-    )
+    # website_final 1D CNN / latent (External data directory)
+    # Layout under data_dir mirrors the dash/transformer entries above; the
+    # artifacts ship in the S3 data manifest (docs/admin/updating-data-files.md).
+    oned_cnn_z_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/1dcnn/z/model.pth",
+                                       env="ASTRODASH_1DCNN_Z_MODEL_PATH")
+    oned_cnn_z_class_mapping_path: str = Field("/mnt/astrodash-data/pre_trained_models/1dcnn/z/class_mapping.json",
+                                               env="ASTRODASH_1DCNN_Z_CLASS_MAPPING_PATH")
+    oned_cnn_noz_model_path: str = Field("/mnt/astrodash-data/pre_trained_models/1dcnn/noz/model.pth",
+                                         env="ASTRODASH_1DCNN_NOZ_MODEL_PATH")
+    oned_cnn_noz_class_mapping_path: str = Field("/mnt/astrodash-data/pre_trained_models/1dcnn/noz/class_mapping.json",
+                                                 env="ASTRODASH_1DCNN_NOZ_CLASS_MAPPING_PATH")
+    latent_z_encoder_path: str = Field("/mnt/astrodash-data/pre_trained_models/latent/z/encoder.pt",
+                                       env="ASTRODASH_LATENT_Z_ENCODER_PATH")
+    latent_z_classifier_path: str = Field("/mnt/astrodash-data/pre_trained_models/latent/z/classifier.pt",
+                                          env="ASTRODASH_LATENT_Z_CLASSIFIER_PATH")
+    latent_noz_encoder_path: str = Field("/mnt/astrodash-data/pre_trained_models/latent/noz/encoder.pt",
+                                         env="ASTRODASH_LATENT_NOZ_ENCODER_PATH")
+    latent_noz_classifier_path: str = Field("/mnt/astrodash-data/pre_trained_models/latent/noz/classifier.pt",
+                                            env="ASTRODASH_LATENT_NOZ_CLASSIFIER_PATH")
 
     # Template and Line List Paths (External data directory)
     # Resolved in model_validator when default path is missing (e.g. dev without /mnt/astrodash-data)
@@ -186,14 +148,6 @@ class Settings(BaseSettings):
 
     def website_final_idx_to_label(self) -> Dict[int, str]:
         return {idx: name for name, idx in self.website_final_label_mapping.items()}
-
-    def website_final_class_names(self) -> List[str]:
-        return [
-            name
-            for name, _ in sorted(
-                self.website_final_label_mapping.items(), key=lambda item: item[1]
-            )
-        ]
 
     def latent_encoder_latent_flat(self) -> int:
         return self.latent_encoder_bottleneck_length * self.latent_encoder_bottleneck_dim
