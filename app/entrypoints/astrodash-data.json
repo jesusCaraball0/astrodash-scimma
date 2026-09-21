@@ -24,6 +24,42 @@
     "size": 16301557
   },
   {
+    "path": "pre_trained_models/1dcnn/noz/class_mapping.json",
+    "version_id": "RomnCvcQjDW6QK87j2Wv3sYsHMo0-nI",
+    "etag": "7d69c6fe4e40cae17f65c824e133d807",
+    "size": 76
+  },
+  {
+    "path": "pre_trained_models/1dcnn/noz/model.pth",
+    "version_id": "MyR..xwjYEzAc4k8f5Wa5d-9PjqnUSd",
+    "etag": "1bb6a32baaca922e4d993dac2f874711",
+    "size": 2254874
+  },
+  {
+    "path": "pre_trained_models/1dcnn/noz/training_config.json",
+    "version_id": "ZtMrGukRaVy8oL--EAeQjuFfpaPHAFq",
+    "etag": "557cf3db8dac165ef2a3a1407d5148d9",
+    "size": 905
+  },
+  {
+    "path": "pre_trained_models/1dcnn/z/class_mapping.json",
+    "version_id": "DB9T9aTcQBcw6Ri7aaHfCc9kSZJ5naa",
+    "etag": "7d69c6fe4e40cae17f65c824e133d807",
+    "size": 76
+  },
+  {
+    "path": "pre_trained_models/1dcnn/z/model.pth",
+    "version_id": "9xEbc6PBDIC3yoB632J7GC.m4qSxH3H",
+    "etag": "f1db6551e9e528210dc4b3648e43818b",
+    "size": 2254874
+  },
+  {
+    "path": "pre_trained_models/1dcnn/z/training_config.json",
+    "version_id": "ixhCGuax5aWSG3GV5XFXpvUdWBM9x2W",
+    "etag": "8e7a54449d56007b8c8150a6d9c9d1e0",
+    "size": 898
+  },
+  {
     "path": "pre_trained_models/dash/agnosticZ/model_info.txt",
     "version_id": "w64QjSDtvyNS3jEo7oMKFb3mDNcaYqs",
     "etag": "942281ffb144ae02b3cbfea3153703ac",
@@ -76,6 +112,54 @@
     "version_id": "ju4uDi9SUeIWzMB2Pi7BCfkp7gJK.tu",
     "etag": "3de3e5d056c31e787eb2fda28419e4ef",
     "size": 501
+  },
+  {
+    "path": "pre_trained_models/latent/noz/classifier.pt",
+    "version_id": "j8u2QH1hSQdkXDKKP-ZKORQR3L5tdy5",
+    "etag": "701fd47e06dbe36251095fe2b3b04619",
+    "size": 1059437
+  },
+  {
+    "path": "pre_trained_models/latent/noz/classifier_cfg.json",
+    "version_id": "tWWM9DR1E0EdrMeC7HTK6WQVbHHVOZw",
+    "etag": "3e96259ffedbdd293fffb2b2aa4eca23",
+    "size": 896
+  },
+  {
+    "path": "pre_trained_models/latent/noz/encoder.pt",
+    "version_id": "l6ViKq9Jh-NkwgUCSrjEdrYSw3PE1Mu",
+    "etag": "ca535d5bab226cb5f1e1d919d630f758-2",
+    "size": 27564491
+  },
+  {
+    "path": "pre_trained_models/latent/noz/encoder_cfg.json",
+    "version_id": "WTbfTZ4.HrxvDVgjJvO80m04eC9HG9u",
+    "etag": "1b13ab9026a149c269e8ce5d7a5ab129",
+    "size": 234
+  },
+  {
+    "path": "pre_trained_models/latent/z/classifier.pt",
+    "version_id": "alkv1gjgyKr4S5NGN8IIk4BNyoKrOV5",
+    "etag": "5bdccb934501abd06eb9d2a2856f1a9f",
+    "size": 1059437
+  },
+  {
+    "path": "pre_trained_models/latent/z/classifier_cfg.json",
+    "version_id": "fsYoPvJNsrIjtvZO1fDpRgSD1GRu1Wf",
+    "etag": "26b6d0e380be1722ec0d2321ae53c103",
+    "size": 883
+  },
+  {
+    "path": "pre_trained_models/latent/z/encoder.pt",
+    "version_id": "LU3MnwIiQVSH5zgo6LgekCCsQIMpmmd",
+    "etag": "5e2bd1a0ecafc4235cdf1c8246d27b6c-2",
+    "size": 27565835
+  },
+  {
+    "path": "pre_trained_models/latent/z/encoder_cfg.json",
+    "version_id": "feNknyMP-D9GM2.J3.4vhHR5nDEnSOy",
+    "etag": "1b13ab9026a149c269e8ce5d7a5ab129",
+    "size": 234
   },
   {
     "path": "pre_trained_models/templates/sn_and_host_templates.npz",
