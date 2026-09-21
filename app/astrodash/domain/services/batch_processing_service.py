@@ -1,6 +1,7 @@
 import zipfile
 import io
 import asyncio
+import posixpath
 from typing import List, Dict, Any, Optional, Union
 from django.core.files.uploadedfile import SimpleUploadedFile
 from astrodash.domain.services.spectrum_service import SpectrumService
@@ -11,6 +12,74 @@ from astrodash.config.logging import get_logger
 from astrodash.core.exceptions import BatchProcessingException, ValidationException
 
 logger = get_logger(__name__)
+
+REDSHIFT_UNMATCHED_FILE_MESSAGE = (
+    "No redshift given for {missing}. Provide one redshift for the whole "
+    "batch, or one for every spectrum keyed by filename."
+)
+
+REDSHIFT_UNKNOWN_KEY_MESSAGE = (
+    "Redshift given for {unknown}, which is not a spectrum in this batch."
+)
+
+
+def _redshift_for_file(filename: str, by_filename: Dict[str, float]) -> Optional[float]:
+    """Look a spectrum's redshift up by full path, then by basename.
+
+    A zip entry carries its archive path (``spectra/sn_a.dat``) while the
+    operator is reading filenames off their own disk, so both spellings match.
+    """
+    if filename in by_filename:
+        return by_filename[filename]
+    return by_filename.get(posixpath.basename(filename))
+
+
+def _resolve_batch_redshifts(
+    params: Dict[str, Any], filenames: List[str]
+) -> Dict[str, Optional[float]]:
+    """Map each spectrum filename to the redshift that should be applied to it.
+
+    ``zValue`` alone applies to every spectrum. ``zByFilename`` assigns one per
+    spectrum and must name all of them; a spectrum with no entry, or an entry
+    naming no spectrum, is refused rather than quietly defaulted, because a
+    silently wrong redshift yields a confidently wrong classification.
+
+    Raises:
+        ValidationException: If a filename map leaves a spectrum unassigned or
+            names a file the batch does not contain.
+    """
+    by_filename = params.get("zByFilename") or {}
+    broadcast = params.get("zValue")
+
+    if not by_filename:
+        return {name: broadcast for name in filenames}
+
+    resolved: Dict[str, Optional[float]] = {}
+    missing: List[str] = []
+    for name in filenames:
+        value = _redshift_for_file(name, by_filename)
+        if value is None:
+            missing.append(name)
+        resolved[name] = value
+    if missing:
+        raise ValidationException(
+            REDSHIFT_UNMATCHED_FILE_MESSAGE.format(missing=", ".join(sorted(missing)))
+        )
+
+    matched = set()
+    for name in filenames:
+        if name in by_filename:
+            matched.add(name)
+        else:
+            matched.add(posixpath.basename(name))
+    unknown = sorted(set(by_filename) - matched)
+    if unknown:
+        raise ValidationException(
+            REDSHIFT_UNKNOWN_KEY_MESSAGE.format(unknown=", ".join(unknown))
+        )
+
+    return resolved
+
 
 class BatchProcessingService:
     """
@@ -111,6 +180,8 @@ class BatchProcessingService:
                     logger.error(f"Error reading file {fname}: {e}")
                     results[fname] = {"error": str(e)}
 
+        redshifts = _resolve_batch_redshifts(params, [n for n, _ in entries])
+
         # Concurrency for processing prepared entries
         if entries:
             max_concurrency = min(8, len(entries))
@@ -119,8 +190,10 @@ class BatchProcessingService:
             async def worker_zip(name: str, file_like_obj: Any) -> None:
                 async with semaphore:
                     try:
+                        file_params = dict(params)
+                        file_params["zValue"] = redshifts[name]
                         result = await self._process_single_file(
-                            file_like_obj, name, params, model_type, model_id, classifier
+                            file_like_obj, name, file_params, model_type, model_id, classifier
                         )
                         results[name] = result
                     except Exception as e:
@@ -154,25 +227,34 @@ class BatchProcessingService:
             model_type, model_id if model_type == "user_uploaded" else None
         )
 
-        max_concurrency = min(8, max(1, len(files)))
-        semaphore = asyncio.Semaphore(max_concurrency)
-
-        async def worker(single_file: Any) -> None:
+        entries: List[tuple] = []
+        for single_file in files:
             filename_local = getattr(single_file, 'name', getattr(single_file, 'filename', 'unknown'))
             if not filename_local.lower().endswith(self.supported_extensions):
                 results[filename_local] = {"error": "Unsupported file type"}
-                return
-            async with semaphore:
-                try:
-                    result_local = await self._process_single_file(
-                        single_file, filename_local, params, model_type, model_id, classifier
-                    )
-                    results[filename_local] = result_local
-                except Exception as e:
-                    logger.error(f"Error processing file {filename_local}: {e}")
-                    results[filename_local] = {"error": str(e)}
+                continue
+            entries.append((filename_local, single_file))
 
-        await asyncio.gather(*(worker(f) for f in files))
+        redshifts = _resolve_batch_redshifts(params, [n for n, _ in entries])
+
+        if entries:
+            max_concurrency = min(8, max(1, len(entries)))
+            semaphore = asyncio.Semaphore(max_concurrency)
+
+            async def worker(filename_local: str, single_file: Any) -> None:
+                async with semaphore:
+                    try:
+                        file_params = dict(params)
+                        file_params["zValue"] = redshifts[filename_local]
+                        result_local = await self._process_single_file(
+                            single_file, filename_local, file_params, model_type, model_id, classifier
+                        )
+                        results[filename_local] = result_local
+                    except Exception as e:
+                        logger.error(f"Error processing file {filename_local}: {e}")
+                        results[filename_local] = {"error": str(e)}
+
+            await asyncio.gather(*(worker(n, f) for n, f in entries))
 
         logger.info(f"File list processing completed. Processed {len(results)} files.")
         return results
@@ -237,7 +319,8 @@ class BatchProcessingService:
                 },
                 "classification": result.results,
                 "model_type": model_type,
-                "model_id": model_id if model_type == "user_uploaded" else None
+                "model_id": model_id if model_type == "user_uploaded" else None,
+                "applied_redshift": params.get("zValue"),
             }
 
         except Exception as e:
