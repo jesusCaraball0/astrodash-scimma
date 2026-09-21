@@ -998,13 +998,18 @@ def batch_process(request):
             # This gate is the batch flow's own, separate from the classify
             # form's, but reads the same declared policy: only a model whose
             # definition requires a redshift is refused for missing one.
+            has_redshift = (
+                getattr(form, 'redshift_broadcast', None) is not None
+                or bool(getattr(form, 'redshift_by_filename', None))
+            )
             if (redshift_input_policy(selected_model_type) == REDSHIFT_INPUT_REQUIRED
-                    and not form.cleaned_data.get('redshift')):
+                    and not has_redshift):
                 form.add_error('redshift', REDSHIFT_REQUIRED_MESSAGE)
             else:
                 try:
                     model_type = selected_model_type
-                    redshifts = form.cleaned_data.get('redshift') or []
+                    z_broadcast = getattr(form, 'redshift_broadcast', None)
+                    z_by_filename = getattr(form, 'redshift_by_filename', None) or {}
 
                     # Prepare params
                     params = {
@@ -1012,8 +1017,8 @@ def batch_process(request):
                         'minWave': form.cleaned_data['min_wave'],
                         'maxWave': form.cleaned_data['max_wave'],
                         'knownZ': form.cleaned_data['known_z'],
-                        'zValue': redshifts[0] if redshifts else None,
-                        'zValues': redshifts,
+                        'zValue': z_broadcast,
+                        'zByFilename': z_by_filename,
                         'calculateRlap': form.cleaned_data['calculate_rlap'],
                         'modelType': model_type if model_type != 'user_uploaded' else 'dash',  # Fallback for display
                     }
@@ -1025,7 +1030,7 @@ def batch_process(request):
                         f'''maxWave={params['maxWave']} '''
                         f'''knownZ={params['knownZ']} '''
                         f'''zValue={params['zValue']} '''
-                        f'''zValues={params['zValues']} '''
+                        f'''zByFilename={params['zByFilename']} '''
                         f'''calculateRlap={params['calculateRlap']} '''
                         f'''modelType={params['modelType']} '''
                     )
@@ -1082,18 +1087,15 @@ def batch_process(request):
 def _batch_input_redshift_display(params):
     """Format submitted batch redshifts for the results banner and CSV fallback.
 
-    A single value stays a number (or ``None``). Several values become a
-    comma-separated string so the banner can show the whole list.
+    A batch-wide redshift stays a number. A per-filename map becomes a
+    ``name=value`` list in the order the operator wrote it, so the banner
+    shows what was actually submitted. ``None`` when none was given.
     """
-    z_values = params.get('zValues')
-    if z_values is None:
-        z = params.get('zValue')
-        z_values = [] if z is None else [z]
-    if not z_values:
-        return None
-    if len(z_values) == 1:
-        return z_values[0]
-    return ', '.join(str(z) for z in z_values)
+    by_filename = params.get('zByFilename') or {}
+    if by_filename:
+        return ', '.join(f'{name}={value}' for name, value in by_filename.items())
+    z = params.get('zValue')
+    return None if z is None else z
 
 
 def _batch_run_metadata(model_type, params, classified_at=None):

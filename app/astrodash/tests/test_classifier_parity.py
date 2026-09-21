@@ -15,6 +15,8 @@ import json
 import re
 import tempfile
 from contextlib import nullcontext
+import io
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -429,17 +431,55 @@ class BatchRunMetadataTests(TestCase):
         self.assertIn("'Input Redshift'", html)
 
 
-class BatchRedshiftCsvTests(TestCase):
-    """Batch redshift is a CSV list, one value per spectrum, lengths must match."""
+class BatchRedshiftParsingTests(TestCase):
+    """The batch redshift field is a batch-wide value or a per-filename map."""
 
-    def test_parse_redshift_csv_accepts_list_or_single_value(self):
-        self.assertEqual(parse_redshift_csv("[1, 0.01, 0.1]"), [1.0, 0.01, 0.1])
-        self.assertEqual(parse_redshift_csv("0.01, 0.1"), [0.01, 0.1])
-        self.assertEqual(parse_redshift_csv("0.03"), [0.03])
-        self.assertEqual(parse_redshift_csv(""), [])
-        self.assertEqual(parse_redshift_csv(None), [])
+    def test_single_value_is_a_batch_wide_broadcast(self):
+        self.assertEqual(parse_batch_redshifts("0.03"), (0.03, {}))
+        self.assertEqual(parse_batch_redshifts(" 0.03 "), (0.03, {}))
 
-    def test_batch_form_parses_csv_list(self):
+    def test_blank_means_no_redshift(self):
+        self.assertEqual(parse_batch_redshifts(""), (None, {}))
+        self.assertEqual(parse_batch_redshifts(None), (None, {}))
+
+    def test_filename_map_is_keyed_not_positional(self):
+        self.assertEqual(
+            parse_batch_redshifts("sn_a.dat=0.01, sn_b.dat=0.02"),
+            (None, {"sn_a.dat": 0.01, "sn_b.dat": 0.02}),
+        )
+
+    def test_json_object_spelling_is_accepted(self):
+        self.assertEqual(
+            parse_batch_redshifts('{"sn_a.dat": 0.01}'),
+            (None, {"sn_a.dat": 0.01}),
+        )
+
+    def test_bare_list_is_refused(self):
+        """A positional list cannot say which spectrum each value belongs to."""
+        with self.assertRaises(ValueError):
+            parse_batch_redshifts("[0.01, 0.02]")
+
+    def test_malformed_input_is_refused(self):
+        for bad in ("sn_a.dat", "sn_a.dat=", "=0.01", "sn_a.dat=abc"):
+            with self.subTest(value=bad), self.assertRaises(ValueError):
+                parse_batch_redshifts(bad)
+
+    def test_batch_form_exposes_both_halves(self):
+        form = BatchForm(
+            data={
+                "smoothing": 0,
+                "min_wave": 3500,
+                "max_wave": 10000,
+                "redshift": "sn_a.dat=0.01, sn_b.dat=0.02",
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNone(form.redshift_broadcast)
+        self.assertEqual(
+            form.redshift_by_filename, {"sn_a.dat": 0.01, "sn_b.dat": 0.02}
+        )
+
+    def test_batch_form_rejects_a_positional_list(self):
         form = BatchForm(
             data={
                 "smoothing": 0,
@@ -448,12 +488,14 @@ class BatchRedshiftCsvTests(TestCase):
                 "redshift": "[0.01, 0.02]",
             }
         )
-        self.assertTrue(form.is_valid(), form.errors)
-        self.assertEqual(form.cleaned_data["redshift"], [0.01, 0.02])
+        self.assertFalse(form.is_valid())
+        self.assertIn("redshift", form.errors)
 
-    def test_process_file_list_applies_redshifts_in_order(self):
-        calls = []
 
+class BatchRedshiftApplicationTests(TestCase):
+    """Which redshift reaches which spectrum."""
+
+    def _service(self, calls):
         async def get_spectrum(file):
             return SimpleNamespace(
                 x=[1.0], y=[1.0], file_name=file.name, redshift=None, meta={}
@@ -465,42 +507,91 @@ class BatchRedshiftCsvTests(TestCase):
             return spec
 
         classification_svc = MagicMock()
-        classification_svc.model_factory.get_classifier = MagicMock(return_value=object())
+        classification_svc.model_factory.get_classifier = MagicMock(
+            return_value=object()
+        )
         classification_svc.classify_spectrum = AsyncMock(
             return_value=SimpleNamespace(results={"best_match": {}})
         )
-        svc = BatchProcessingService(
+        return BatchProcessingService(
             MagicMock(get_spectrum_from_file=get_spectrum),
             classification_svc,
             MagicMock(process_spectrum_with_params=process),
         )
-        files = [
-            SimpleUploadedFile("a.dat", b"1 1"),
-            SimpleUploadedFile("b.dat", b"1 1"),
-        ]
-        out = async_to_sync(svc.process_batch)(
-            files, {"zValues": [0.1, 0.2], "smoothing": 0}, "dash"
-        )
-        self.assertEqual(dict(calls), {"a.dat": 0.1, "b.dat": 0.2})
-        self.assertEqual(out["a.dat"]["applied_redshift"], 0.1)
-        self.assertEqual(out["b.dat"]["applied_redshift"], 0.2)
 
-    def test_mismatched_redshift_and_spectrum_counts_fail(self):
-        classification_svc = MagicMock()
-        classification_svc.model_factory.get_classifier = MagicMock(return_value=object())
-        svc = BatchProcessingService(
-            MagicMock(), classification_svc, MagicMock()
+    def _files(self, *names):
+        return [SimpleUploadedFile(n, b"1 1") for n in names]
+
+    def test_one_redshift_applies_to_every_spectrum(self):
+        """The pre-existing workflow: one value covers the whole batch."""
+        calls = []
+        out = async_to_sync(self._service(calls).process_batch)(
+            self._files("a.dat", "b.dat", "c.dat"),
+            {"zValue": 0.05, "smoothing": 0},
+            "dash",
         )
-        files = [
-            SimpleUploadedFile("a.dat", b"1 1"),
-            SimpleUploadedFile("b.dat", b"1 1"),
-        ]
+        self.assertEqual(dict(calls), {"a.dat": 0.05, "b.dat": 0.05, "c.dat": 0.05})
+        self.assertEqual(out["a.dat"]["applied_redshift"], 0.05)
+
+    def test_filename_map_assigns_by_name_not_by_position(self):
+        calls = []
+        async_to_sync(self._service(calls).process_batch)(
+            self._files("c.dat", "a.dat", "b.dat"),
+            {"zByFilename": {"a.dat": 0.01, "b.dat": 0.02, "c.dat": 0.03}, "smoothing": 0},
+            "dash",
+        )
+        # Submission order is c, a, b; each file still gets its own value.
+        self.assertEqual(dict(calls), {"a.dat": 0.01, "b.dat": 0.02, "c.dat": 0.03})
+
+    def test_zip_entry_order_does_not_shuffle_redshifts(self):
+        """A zip yields namelist() order, which is not what the operator sees."""
+        calls = []
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name in ("sn_c.dat", "sn_a.dat", "sn_b.dat"):  # written out of order
+                zf.writestr(name, "1 1\n")
+        async_to_sync(self._service(calls).process_batch)(
+            SimpleUploadedFile("batch.zip", buf.getvalue()),
+            {
+                "zByFilename": {"sn_a.dat": 0.01, "sn_b.dat": 0.02, "sn_c.dat": 0.03},
+                "smoothing": 0,
+            },
+            "dash",
+        )
+        self.assertEqual(
+            dict(calls), {"sn_a.dat": 0.01, "sn_b.dat": 0.02, "sn_c.dat": 0.03}
+        )
+
+    def test_zip_path_prefix_matches_on_basename(self):
+        """A zip entry carries its archive path; the operator types the name."""
+        calls = []
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("spectra/sn_a.dat", "1 1\n")
+        async_to_sync(self._service(calls).process_batch)(
+            SimpleUploadedFile("batch.zip", buf.getvalue()),
+            {"zByFilename": {"sn_a.dat": 0.01}, "smoothing": 0},
+            "dash",
+        )
+        self.assertEqual([z for _, z in calls], [0.01])
+
+    def test_spectrum_missing_from_the_map_is_refused_by_name(self):
         with self.assertRaises(ValidationException) as ctx:
-            async_to_sync(svc.process_batch)(
-                files, {"zValues": [0.1], "smoothing": 0}, "dash"
+            async_to_sync(self._service([]).process_batch)(
+                self._files("a.dat", "b.dat"),
+                {"zByFilename": {"a.dat": 0.01}, "smoothing": 0},
+                "dash",
             )
-        self.assertIn("1 redshift", str(ctx.exception.message))
-        self.assertIn("2 spectrum", str(ctx.exception.message))
+        self.assertIn("b.dat", str(ctx.exception.message))
+
+    def test_map_entry_naming_no_spectrum_is_refused_by_name(self):
+        with self.assertRaises(ValidationException) as ctx:
+            async_to_sync(self._service([]).process_batch)(
+                self._files("a.dat"),
+                {"zByFilename": {"a.dat": 0.01, "typo.dat": 0.02}, "smoothing": 0},
+                "dash",
+            )
+        self.assertIn("typo.dat", str(ctx.exception.message))
 
 
 class RedshiftEstimationGateParityTests(TestCase):

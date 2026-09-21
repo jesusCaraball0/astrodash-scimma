@@ -2,7 +2,7 @@ from django import forms
 from django.core.validators import FileExtensionValidator
 import json
 import ast
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from astrodash.infrastructure.ml.model_registry import (
     REDSHIFT_INPUT_NONE,
@@ -352,21 +352,81 @@ class MultipleFileField(forms.FileField):
         return [super().clean(data, initial)]
 
 
-def parse_redshift_csv(value) -> list:
-    """Parse one redshift or a CSV list such as ``[0.01, 0.1]``."""
+BATCH_REDSHIFT_HELP = (
+    "One redshift for the whole batch (0.05), or one per file keyed by "
+    "filename (sn_a.dat=0.01, sn_b.dat=0.02)."
+)
+
+BATCH_REDSHIFT_FORMAT_ERROR = (
+    "Enter a single redshift for the whole batch, e.g. 0.05, or one per file "
+    "keyed by filename, e.g. sn_a.dat=0.01, sn_b.dat=0.02."
+)
+
+
+def parse_batch_redshifts(value) -> Tuple[Optional[float], Dict[str, float]]:
+    """Parse the batch redshift field into a broadcast value and a per-file map.
+
+    Returns ``(broadcast, by_filename)``. Exactly one side is populated:
+
+    - ``""``/``None`` -> ``(None, {})``, no redshift supplied.
+    - ``0.05`` -> ``(0.05, {})``, applied to every spectrum in the batch.
+    - ``sn_a.dat=0.01, sn_b.dat=0.02`` -> ``(None, {...})``, keyed by filename.
+      A JSON object spelling is accepted too.
+
+    Keying by filename rather than by position is deliberate. Position is
+    ambiguous: a zip yields its files in ``ZipFile.namelist()`` order, which is
+    the order they were written into the archive, not the alphabetical order a
+    file manager shows, and the sequence also skips directories, unsupported
+    extensions and unreadable members. Matching a list against that order
+    silently attaches a redshift to the wrong spectrum, which produces a
+    confidently wrong classification rather than an error.
+
+    Raises:
+        ValueError: If the text is neither a single number nor a filename map.
+    """
     if value is None:
-        return []
+        return None, {}
     text = str(value).strip()
     if text == "":
-        return []
-    if not text.startswith("["):
-        text = f"[{text}]"
-    parsed = ast.literal_eval(text)
-    if isinstance(parsed, (int, float)):
-        return [float(parsed)]
-    if not isinstance(parsed, (list, tuple)):
-        raise ValueError("Enter redshifts as a list, e.g. [0.01, 0.1].")
-    return [float(x) for x in parsed]
+        return None, {}
+
+    try:
+        return float(text), {}
+    except ValueError:
+        pass
+
+    if text.startswith("{"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError, TypeError) as exc:
+            raise ValueError(BATCH_REDSHIFT_FORMAT_ERROR) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(BATCH_REDSHIFT_FORMAT_ERROR)
+        pairs = parsed.items()
+    else:
+        pairs = []
+        for chunk in text.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            name, sep, raw = chunk.partition("=")
+            if not sep:
+                raise ValueError(BATCH_REDSHIFT_FORMAT_ERROR)
+            pairs.append((name, raw))
+
+    by_filename: Dict[str, float] = {}
+    for name, raw in pairs:
+        key = str(name).strip()
+        if not key:
+            raise ValueError(BATCH_REDSHIFT_FORMAT_ERROR)
+        try:
+            by_filename[key] = float(str(raw).strip())
+        except (TypeError, ValueError) as exc:
+            raise ValueError(BATCH_REDSHIFT_FORMAT_ERROR) from exc
+
+    if not by_filename:
+        raise ValueError(BATCH_REDSHIFT_FORMAT_ERROR)
+    return None, by_filename
 
 
 class BatchForm(forms.Form):
@@ -414,8 +474,10 @@ class BatchForm(forms.Form):
     
     redshift = forms.CharField(
         required=False,
-        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': '[0.01, 0.1]'}),
-        help_text="One redshift per spectrum, in order, e.g. [0.01, 0.1, 0.2].",
+        widget=forms.TextInput(
+            attrs={'class': 'form-control', 'placeholder': '0.05 or sn_a.dat=0.01, sn_b.dat=0.02'}
+        ),
+        help_text=BATCH_REDSHIFT_HELP,
     )
 
     calculate_rlap = forms.BooleanField(
@@ -427,11 +489,15 @@ class BatchForm(forms.Form):
     )
 
     def clean_redshift(self):
+        """Store the parsed pair; ``clean`` and the view read both halves."""
         raw = self.cleaned_data.get('redshift')
         try:
-            return parse_redshift_csv(raw)
-        except (ValueError, SyntaxError, TypeError):
-            raise forms.ValidationError("Enter redshifts as a list, e.g. [0.01, 0.1].")
+            broadcast, by_filename = parse_batch_redshifts(raw)
+        except (ValueError, SyntaxError, TypeError) as exc:
+            raise forms.ValidationError(str(exc) or BATCH_REDSHIFT_FORMAT_ERROR)
+        self.redshift_broadcast = broadcast
+        self.redshift_by_filename = by_filename
+        return raw
 
     def clean(self):
         cleaned_data = super().clean()
@@ -448,9 +514,12 @@ class BatchForm(forms.Form):
              pass 
 
         known_z = cleaned_data.get('known_z')
-        redshifts = cleaned_data.get('redshift') or []
+        has_redshift = (
+            getattr(self, 'redshift_broadcast', None) is not None
+            or bool(getattr(self, 'redshift_by_filename', None))
+        )
 
-        if known_z and not redshifts:
+        if known_z and not has_redshift:
             self.add_error('redshift', "Redshift is required when 'Known Redshift' is checked.")
 
         return cleaned_data
