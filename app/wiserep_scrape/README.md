@@ -25,8 +25,11 @@ there is no reason to go faster.
 
 ## Where a dataset lives
 
-On the external data mount, alongside every other dataset this project uses,
-not in the repository:
+Not in the repository. `.gitignore` excludes `app/wiserep_scrape/data/` so a
+local run cannot commit a dataset by accident.
+
+Locally, point `--output` at the mount, which is where the leaderboard's
+scoring step expects to find a month:
 
 ```
 {ASTRODASH_DATA_DIR}/wiserep_challenge/<YYYY-MM>/
@@ -34,15 +37,38 @@ not in the repository:
     spectra/           the ASCII spectra metadata.csv names
 ```
 
-`ASTRODASH_DATA_DIR` is `/mnt/astrodash-data` by default. The repo keeps
-model weights, templates, line lists and twins artifacts there rather than in
-git (see the project CLAUDE.md), and a monthly dataset that grows by one
-directory forever belongs there for the same reason. `.gitignore` excludes
-`app/wiserep_scrape/data/` so a local run cannot commit a dataset by accident.
+`ASTRODASH_DATA_DIR` is `/mnt/astrodash-data` by default.
 
-To publish a month for other environments, upload it under `init/data/` and
-regenerate the manifest, exactly as for any other data file:
-`docs/admin/updating-data-files.md`.
+### Publishing a month
+
+Datasets live in the same Jetstream2 bucket as everything else, under
+`challenges/wiserep/`:
+
+```bash
+mc cp        data/2026-07/metadata.csv  js-blast/astrodash/challenges/wiserep/2026-07/metadata.csv
+mc cp --recursive data/2026-07/spectra/ js-blast/astrodash/challenges/wiserep/2026-07/spectra/
+```
+
+Note the prefix. `init/data/` is the *download manifest* root: every file
+under it is fetched onto every pod and every developer volume at container
+start. Scoring is an offline operator task that no cluster performs, and a
+month is roughly 24 MB of spectra with another arriving every month, so
+putting challenge data there would grow the startup download of every
+environment forever for something none of them use. `challenges/` sits
+outside the manifest, so nothing is downloaded automatically and no manifest
+regeneration or image rebuild is needed to publish a month.
+
+Pull a month when you actually need to score it:
+
+```bash
+mc cp --recursive js-blast/astrodash/challenges/wiserep/2026-07/ \
+  /mnt/astrodash-data/wiserep_challenge/2026-07/
+```
+
+Reads from this bucket are anonymous; only uploading needs credentials. See
+`docs/admin/updating-data-files.md` for the bucket's endpoint and access
+details, and note that its manifest steps apply to `init/data/` only -- they
+are deliberately not part of publishing a challenge month.
 
 ## Identifying the client
 
