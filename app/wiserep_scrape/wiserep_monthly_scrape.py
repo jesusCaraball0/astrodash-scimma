@@ -60,12 +60,15 @@ from urllib3.util.retry import Retry
 BASE_URL = "https://www.wiserep.org"
 SEARCH_URL = f"{BASE_URL}/search/spectra"
 
-# WISeREP's public community tooling accesses pages with a TNS-style marker
-# User-Agent. A descriptive marker is used here; no API key or login is needed
-# for public data.
-USER_AGENT = (
-    'tns_marker{"tns_id":0,"type":"bot","name":"AstroDASH_WISeREP_Ingest"}'
-)
+# Identify the client plainly. No API key or login is needed for the public
+# pages this reads.
+#
+# An earlier revision sent a TNS-style marker with "tns_id":0. TNS issues real
+# bot ids on registration and WISeREP is operated by the same group, so a
+# marker carrying a placeholder id claims a registration that does not exist.
+# If AstroDASH registers a bot id, set it through --user-agent rather than
+# reinstating the literal below.
+USER_AGENT = "AstroDASH-WISeREP-Ingest/1.0 (+https://astrodash.scimma.org)"
 
 METADATA_COLUMNS = ["iau", "filename", "type", "redshift"]
 
@@ -140,8 +143,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--delay",
         type=float,
-        default=0.10,
-        help="Delay between WISeREP requests in seconds (default: 0.10)",
+        default=1.0,
+        help=(
+            "Delay between WISeREP requests in seconds (default: 1.0). This "
+            "runs once a month, so politeness costs nothing."
+        ),
+    )
+    p.add_argument(
+        "--user-agent",
+        default=USER_AGENT,
+        help="Override the User-Agent, e.g. to carry a registered bot id",
     )
     p.add_argument(
         "--overwrite",
@@ -165,11 +176,11 @@ def parse_cli_date(value: str) -> date:
         ) from exc
 
 
-def make_session() -> requests.Session:
+def make_session(user_agent: str = USER_AGENT) -> requests.Session:
     session = requests.Session()
     session.headers.update(
         {
-            "User-Agent": USER_AGENT,
+            "User-Agent": user_agent,
             "Accept": "text/html,application/xhtml+xml,text/csv;q=0.9,*/*;q=0.8",
         }
     )
@@ -1234,7 +1245,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     spectra_dir.mkdir(parents=True, exist_ok=True)
 
-    session = make_session()
+    session = make_session(args.user_agent)
 
     print(
         f"Searching WISeREP spectrum creation dates "

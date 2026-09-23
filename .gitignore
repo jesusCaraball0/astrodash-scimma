@@ -154,6 +154,7 @@ CLAUDE.md
 app/astrodash/explorer/dash_twinsfromspace.html
 astrodash-logs/
 
-# Monthly WISeREP challenge spectra (metadata.csv stays tracked)
-app/wiserep_scrape/data/*/spectra/
+# Monthly WISeREP challenge datasets live on the external data mount,
+# not in the repo -- see app/wiserep_scrape/README.md.
+app/wiserep_scrape/data/
 wiserep_data/
