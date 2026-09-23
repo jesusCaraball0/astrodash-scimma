@@ -153,3 +153,8 @@ CLAUDE.md
 # Astrodash local
 app/astrodash/explorer/dash_twinsfromspace.html
 astrodash-logs/
+
+# Monthly WISeREP challenge datasets live on the external data mount,
+# not in the repo -- see app/wiserep_scrape/README.md.
+app/wiserep_scrape/data/
+wiserep_data/
