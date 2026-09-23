@@ -1,0 +1,63 @@
+{
+  "eval_window": "Jun 1 \u2013 Jun 30, 2026",
+  "models": [
+    {
+      "accuracy": 63.3,
+      "id": "transformer",
+      "n_scored": 218,
+      "precision": 0.1295774647887324,
+      "recall": 0.19574468085106383,
+      "roc": 0.43241989723342755,
+      "skipped": 5
+    },
+    {
+      "accuracy": 70.9,
+      "id": "dash",
+      "n_scored": 220,
+      "precision": 0.36025081788440566,
+      "recall": 0.44698912198912205,
+      "roc": 0.8247933601737341,
+      "skipped": 3
+    },
+    {
+      "accuracy": 85.6,
+      "id": "1dCNN_z",
+      "n_scored": 216,
+      "precision": 0.7666858017604287,
+      "recall": 0.7883393285371703,
+      "roc": 0.9757774646477875,
+      "skipped": 7
+    },
+    {
+      "accuracy": 67.7,
+      "id": "1dCNN_noz",
+      "n_scored": 220,
+      "precision": 0.4545238095238095,
+      "recall": 0.5412004662004662,
+      "roc": 0.8466765838311663,
+      "skipped": 3
+    },
+    {
+      "accuracy": 74.7,
+      "id": "latent_z",
+      "n_scored": 217,
+      "precision": 0.5829406971710844,
+      "recall": 0.6810011990407674,
+      "roc": 0.9471496625528962,
+      "skipped": 6
+    },
+    {
+      "accuracy": 64.7,
+      "id": "latent_noz",
+      "n_scored": 221,
+      "precision": 0.5264855381697486,
+      "recall": 0.5718240093240093,
+      "roc": 0.8483410382685792,
+      "skipped": 2
+    }
+  ],
+  "month": "2026-06",
+  "month_label": "June 2026",
+  "spectra_count": 223,
+  "status": "Finalized"
+}
