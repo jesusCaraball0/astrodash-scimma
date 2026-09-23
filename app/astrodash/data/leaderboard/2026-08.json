@@ -1,5 +1,4 @@
 {
-  "dataset_dir": "/app/wiserep_scrape/data/2026-08",
   "eval_window": "Aug 1 \u2013 Aug 31, 2026",
   "models": [
     {

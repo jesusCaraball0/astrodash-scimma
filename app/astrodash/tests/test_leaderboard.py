@@ -14,7 +14,10 @@ from astrodash.infrastructure.ml.leaderboard.dataset import (
     drop_duplicate_spectra,
     load_challenge,
 )
-from astrodash.infrastructure.ml.leaderboard.evaluate import score_definition
+from astrodash.infrastructure.ml.leaderboard.evaluate import (
+    _probability_vector,
+    score_definition,
+)
 from astrodash.infrastructure.ml.leaderboard.metrics import score_predictions
 from astrodash.infrastructure.ml.leaderboard.page import build_leaderboard_context
 from astrodash.infrastructure.ml.leaderboard.store import write_scores
@@ -181,6 +184,66 @@ def _row(iau: str, filename: str, wave, flux) -> ChallengeSpectrum:
         redshift=0.01,
         spectrum=Spectrum(x=list(wave), y=list(flux), file_name=filename),
     )
+
+
+class ProbabilityVectorTests(SimpleTestCase):
+    """One unusable spectrum must not cost a model its ROC for the month.
+
+    ``roc_auc_score`` rejects the whole array if any element is NaN, so a
+    single bad probability vector silently turned a month's ROC into null.
+    The transformer produced exactly one such vector on the June 2026
+    challenge (2026obc_91563.txt) out of 223, which is why it alone showed no
+    ROC while every other model did.
+    """
+
+    def _result(self, probs):
+        return {
+            "best_match": {"type": "SN Ia"},
+            "class_probabilities": probs,
+        }
+
+    def test_finite_distribution_is_kept(self):
+        vector = _probability_vector(
+            self._result({"SN Ia": 0.7, "SN II": 0.2, "SN IIn": 0.1})
+        )
+        self.assertIsNotNone(vector)
+        self.assertAlmostEqual(sum(vector), 1.0)
+
+    def test_nan_probability_is_dropped(self):
+        self.assertIsNone(
+            _probability_vector(self._result({"SN Ia": float("nan"), "SN II": 0.5}))
+        )
+
+    def test_infinite_probability_is_dropped(self):
+        self.assertIsNone(
+            _probability_vector(self._result({"SN Ia": float("inf"), "SN II": 0.5}))
+        )
+
+    def test_all_zero_distribution_is_dropped(self):
+        """A zero vector carries no ranking information."""
+        self.assertIsNone(_probability_vector(self._result({"SN Ia": 0.0})))
+
+    def test_unmapped_labels_are_dropped(self):
+        """Nothing canonicalizes, so the summed vector is all zeros."""
+        self.assertIsNone(_probability_vector(self._result({"not-a-class": 1.0})))
+
+    def test_missing_probabilities_fall_back_to_the_prediction(self):
+        vector = _probability_vector({"best_match": {"type": "SN Ia"}})
+        self.assertEqual(sum(vector), 1.0)
+
+    def test_one_bad_vector_does_not_null_the_whole_roc(self):
+        """The regression itself: good rows still yield a ROC."""
+        good = [
+            ([0.9, 0.05, 0.03, 0.01, 0.01], "SN Ia"),
+            ([0.05, 0.9, 0.03, 0.01, 0.01], "SN Ib/c"),
+            ([0.05, 0.03, 0.9, 0.01, 0.01], "SN II"),
+            ([0.05, 0.03, 0.01, 0.9, 0.01], "SN IIn"),
+            ([0.05, 0.03, 0.01, 0.01, 0.9], "SLSN-I"),
+        ]
+        y_proba = [v for v, _ in good]
+        y_true = [t for _, t in good]
+        scores = score_predictions(y_true, y_true, y_proba)
+        self.assertIsNotNone(scores["roc"])
 
 
 class DatasetDedupTests(SimpleTestCase):

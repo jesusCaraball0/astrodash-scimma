@@ -155,7 +155,7 @@ def leaderboard(request):
     """Render standings for listed models on the monthly WISeREP challenge.
 
     Rankings come from ``astrodash/data/leaderboard/<YYYY-MM>.json`` produced
-    by ``wiserep_scrape/evaluate_leaderboard.py``. Titles and colors come from
+    by ``leaderboard.evaluate``. Titles and colors come from
     the model registry. Until a score file exists the listed models still
     appear, with metrics pending.
     """

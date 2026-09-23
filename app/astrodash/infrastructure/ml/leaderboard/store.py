@@ -7,11 +7,24 @@ from calendar import month_abbr, month_name, monthrange
 from pathlib import Path
 from typing import Any, Optional
 
-APP_ROOT = Path(__file__).resolve().parents[4]
 PACKAGE_ROOT = Path(__file__).resolve().parents[3]
 
-CHALLENGE_DATA_ROOT = APP_ROOT / "wiserep_scrape" / "data"
+# Score files are small, versioned, and read by the running page, so they live
+# with the code.
 SCORES_DIR = PACKAGE_ROOT / "data" / "leaderboard"
+
+# Challenge datasets are not. They are tens of megabytes per month, arrive
+# monthly, and are read only by the offline scoring step, so they live on the
+# external data mount like every other dataset this project uses. See
+# app/wiserep_scrape/README.md.
+CHALLENGE_SUBDIR = "wiserep_challenge"
+
+
+def challenge_data_root() -> Path:
+    """Root of the monthly challenge datasets on the external data mount."""
+    from astrodash.config.settings import get_settings
+
+    return Path(get_settings().data_dir) / CHALLENGE_SUBDIR
 
 
 def month_label(year_month: str) -> str:
@@ -33,7 +46,7 @@ def next_month(year_month: str) -> str:
 
 
 def challenge_dir(year_month: str) -> Path:
-    return CHALLENGE_DATA_ROOT / year_month
+    return challenge_data_root() / year_month
 
 
 def scores_path(year_month: str) -> Path:
@@ -61,8 +74,9 @@ def available_months() -> list[str]:
     if SCORES_DIR.is_dir():
         for path in SCORES_DIR.glob("????-??.json"):
             found.add(path.stem)
-    if CHALLENGE_DATA_ROOT.is_dir():
-        for path in CHALLENGE_DATA_ROOT.iterdir():
+    root = challenge_data_root()
+    if root.is_dir():
+        for path in root.iterdir():
             if path.is_dir() and (path / "metadata.csv").is_file():
                 found.add(path.name)
     return sorted(found, reverse=True)

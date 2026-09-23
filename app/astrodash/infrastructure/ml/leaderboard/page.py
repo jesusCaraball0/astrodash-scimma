@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from astrodash.infrastructure.ml.leaderboard.dataset import load_challenge
@@ -37,7 +38,9 @@ def build_leaderboard_context(selected_month: Optional[str] = None) -> dict[str,
     elif months:
         year_month = months[0]
     else:
-        year_month = "2026-07"
+        # Nothing scored yet. Show the current month rather than a literal,
+        # which would present a fixed past month as if it were the standings.
+        year_month = datetime.now(timezone.utc).strftime("%Y-%m")
 
     scores = load_scores(year_month)
     prev = previous_month(year_month, months)

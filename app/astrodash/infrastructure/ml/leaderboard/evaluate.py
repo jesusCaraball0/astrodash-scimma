@@ -1,17 +1,19 @@
 """Score listed classifiers on a monthly WISeREP challenge and write JSON.
 
-Usage (from the ``app/`` directory, with the project on PYTHONPATH):
+Usage, from the ``app/`` directory inside the container (scoring needs the
+classifiers, torch, and the model weights on the data mount):
 
     python -m astrodash.infrastructure.ml.leaderboard.evaluate --month 2026-07
 
-Or from the scrape directory:
-
-    python wiserep_scrape/evaluate_leaderboard.py --month 2026-07
+The month's dataset is read from ``{ASTRODASH_DATA_DIR}/wiserep_challenge/``;
+``--data`` overrides that. See ``app/wiserep_scrape/README.md`` for how to pull
+a month onto the mount.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 from typing import Optional
@@ -52,7 +54,14 @@ def _probability_vector(result: dict) -> Optional[list[float]]:
             return None
         return [1.0 if name == pred else 0.0 for name in CANONICAL_CLASSES]
     remapped = remap_probabilities(raw)
-    return [remapped[name] for name in CANONICAL_CLASSES]
+    vector = [remapped[name] for name in CANONICAL_CLASSES]
+    if not all(math.isfinite(value) for value in vector) or sum(vector) <= 0:
+        # roc_auc_score rejects the whole array if any element is NaN, so one
+        # bad spectrum would silently cost the model its ROC for the entire
+        # month -- which is what "roc": null meant for the transformer. Drop
+        # the spectrum instead; the caller counts it as skipped.
+        return None
+    return vector
 
 
 def score_definition(
@@ -127,7 +136,6 @@ def evaluate_month(
         "status": "Finalized",
         "spectra_count": len(rows),
         "models": models,
-        "dataset_dir": str(data_dir),
     }
     if out_path is not None:
         out_path = Path(out_path)
