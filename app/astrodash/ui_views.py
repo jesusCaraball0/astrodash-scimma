@@ -9,6 +9,7 @@ from django.http import (
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_POST
 from django.urls import reverse
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1013,12 +1014,18 @@ def batch_process(request):
             # This gate is the batch flow's own, separate from the classify
             # form's, but reads the same declared policy: only a model whose
             # definition requires a redshift is refused for missing one.
+            has_redshift = (
+                getattr(form, 'redshift_broadcast', None) is not None
+                or bool(getattr(form, 'redshift_by_filename', None))
+            )
             if (redshift_input_policy(selected_model_type) == REDSHIFT_INPUT_REQUIRED
-                    and form.cleaned_data.get('redshift') is None):
+                    and not has_redshift):
                 form.add_error('redshift', REDSHIFT_REQUIRED_MESSAGE)
             else:
                 try:
                     model_type = selected_model_type
+                    z_broadcast = getattr(form, 'redshift_broadcast', None)
+                    z_by_filename = getattr(form, 'redshift_by_filename', None) or {}
 
                     # Prepare params
                     params = {
@@ -1026,7 +1033,8 @@ def batch_process(request):
                         'minWave': form.cleaned_data['min_wave'],
                         'maxWave': form.cleaned_data['max_wave'],
                         'knownZ': form.cleaned_data['known_z'],
-                        'zValue': form.cleaned_data['redshift'],
+                        'zValue': z_broadcast,
+                        'zByFilename': z_by_filename,
                         'calculateRlap': form.cleaned_data['calculate_rlap'],
                         'modelType': model_type if model_type != 'user_uploaded' else 'dash',  # Fallback for display
                     }
@@ -1038,6 +1046,7 @@ def batch_process(request):
                         f'''maxWave={params['maxWave']} '''
                         f'''knownZ={params['knownZ']} '''
                         f'''zValue={params['zValue']} '''
+                        f'''zByFilename={params['zByFilename']} '''
                         f'''calculateRlap={params['calculateRlap']} '''
                         f'''modelType={params['modelType']} '''
                     )
@@ -1069,10 +1078,16 @@ def batch_process(request):
                         model_id=selected_model_id
                     )
 
-                    # Format results for template
-                    formatted_results = _format_batch_results(results, params)
+                    # Format results for template. Run metadata is attached to
+                    # every row so the CSV is self-contained, and also passed
+                    # once for the results-page summary.
+                    run_metadata = _batch_run_metadata(model_type, params)
+                    formatted_results = _format_batch_results(
+                        results, params, metadata=run_metadata
+                    )
                     logger.info("Batch UI processing completed successfully for %d items", len(formatted_results))
                     context['results'] = formatted_results
+                    context['run_metadata'] = run_metadata
                     context['success'] = True
 
                 except AppException as e:
@@ -1085,13 +1100,55 @@ def batch_process(request):
     return render(request, 'astrodash/batch.html', context)
 
 
-def _format_batch_results(results, params):
+def _batch_input_redshift_display(params):
+    """Format submitted batch redshifts for the results banner and CSV fallback.
+
+    A batch-wide redshift stays a number. A per-filename map becomes a
+    ``name=value`` list in the order the operator wrote it, so the banner
+    shows what was actually submitted. ``None`` when none was given.
+    """
+    by_filename = params.get('zByFilename') or {}
+    if by_filename:
+        return ', '.join(f'{name}={value}' for name, value in by_filename.items())
+    z = params.get('zValue')
+    return None if z is None else z
+
+
+def _batch_run_metadata(model_type, params, classified_at=None):
+    """
+    Build the run-level fields attached to a batch result set.
+
+    ``input_redshift`` is the submitted redshift or list of redshifts, or
+    ``None`` when none was given. ``model_type`` is the selected model, not the
+    display fallback stored on ``params['modelType']``.
+    """
+    if classified_at is None:
+        classified_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return {
+        'classified_at': classified_at,
+        'model_type': model_type,
+        'smoothing': params.get('smoothing'),
+        'min_wave': params.get('minWave'),
+        'max_wave': params.get('maxWave'),
+        'input_redshift': _batch_input_redshift_display(params),
+    }
+
+
+def _format_batch_results(results, params, metadata=None):
     """
     Format batch results for display in the template.
+
+    When ``metadata`` is supplied (classified_at, model_type, smoothing,
+    wavelength window, input_redshift), those fields are copied onto every
+    row, including error rows, so the CSV download is self-contained.
+    Per-spectrum ``input_redshift`` prefers the redshift actually applied to
+    that file when the batch service recorded one.
     """
     formatted = {}
+    run_fields = dict(metadata) if metadata else {}
+    banner_input_redshift = run_fields.pop('input_redshift', None)
     for filename, result in results.items():
-        formatted_item = {}
+        formatted_item = dict(run_fields)
 
         # Check for error
         if result.get('error'):
@@ -1116,6 +1173,11 @@ def _format_batch_results(results, params):
                 formatted_item['rlap'] = best_match.get('rlap', '-')
             else:
                 formatted_item['rlap'] = '-'
+
+        if 'applied_redshift' in result:
+            formatted_item['input_redshift'] = result.get('applied_redshift')
+        else:
+            formatted_item['input_redshift'] = banner_input_redshift
 
         formatted[filename] = formatted_item
 

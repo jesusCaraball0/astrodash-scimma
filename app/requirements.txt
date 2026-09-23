@@ -4,6 +4,9 @@ fastapi>=0.115.0
 numpy==2.3.0
 psutil>=5.9.0
 requests>=2.31.0
+# Used by wiserep_scrape/ to parse WISeREP's search pages. Present
+# transitively today; declared so the scraper cannot break silently.
+beautifulsoup4>=4.12.0
 scipy==1.15.3
 sqlalchemy>=2.0.0
 coverage==7.9.0

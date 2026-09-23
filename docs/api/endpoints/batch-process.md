@@ -28,9 +28,35 @@ multipart/form-data
 | `params` | String (JSON) | Yes | Processing parameters as JSON string (see `/process` endpoint). Must include `modelType` unless `model_id` is supplied. |
 
 The `params` JSON must include `modelType` (one of the active built-in model
-ids, currently `dash` or `transformer`) unless a `model_id` is supplied. An
-omitted, unknown, or retired `modelType` returns `400`, validated against the
-model registry's active definitions -- the same contract as `/process`.
+ids: `dash`, `transformer`, `1dCNN_z`, `1dCNN_noz`, `latent_z`, `latent_noz`)
+unless a `model_id` is supplied. An omitted, unknown, or retired `modelType`
+returns `400`, validated against the model registry's active definitions --
+the same contract as `/process`. Redshift rules and label spaces match
+[Process Spectrum](process-spectrum.md#built-in-models): `1dCNN_z` and
+`latent_z` require redshift; `1dCNN_noz` and `latent_noz` do not take redshift
+as an input; those four return the five-class set `SN Ia`, `SN Ib/c`, `SN II`,
+`SN IIn`, `SLSN-I` (not DASH type+age templates).
+
+### Redshift for a batch
+
+`params.zValue` applies one redshift to every spectrum in the batch.
+
+To vary it per spectrum, send `params.zByFilename`, an object keyed by
+filename:
+
+```json
+{"modelType": "transformer", "zByFilename": {"sn_a.dat": 0.01, "sn_b.dat": 0.02}}
+```
+
+A zip entry matches on its full archive path first, then on its basename, so
+`spectra/sn_a.dat` is matched by `sn_a.dat`. When `zByFilename` is supplied it
+must name every spectrum in the batch: a spectrum with no entry, or an entry
+naming a file the batch does not contain, returns `400` and names the file.
+That is deliberate -- a redshift silently attached to the wrong spectrum
+produces a confidently wrong classification rather than an error.
+
+`zByFilename` and `zValue` are not combined; if both are present, the
+per-filename map wins.
 
 ## Response
 

@@ -27,13 +27,23 @@ class AstroDashConfig(AppConfig):
         with no presentation would surface as a broken tab rather than a
         refused startup.
 
+        The settings check runs here for the same fail-in-the-init-container
+        reason. Now that the ``ASTRODASH_*`` variables actually bind, a typo'd
+        configMap value raises ``ValidationError`` the first time something
+        builds ``Settings`` -- which, without this, is the first user request,
+        on a pod that already reported Ready. Constructing it once at startup
+        turns that into a failed rollout.
+
         Raises:
             ValueError: If a model in the registry requires a credential while
                 any part of the gate configuration is unset, blank, or left at
                 a committed default, or if a model declares an empty, unknown,
                 or classification-less result surface list.
+            pydantic.ValidationError: If any ``ASTRODASH_*`` variable holds a
+                value its field rejects.
         """
         from astrodash.config.logging import get_logger
+        from astrodash.config.settings import get_settings
         from astrodash.core.gate_config import gate_configuration
         from astrodash.infrastructure.ml import model_registry
         from astrodash.surfaces import known_surface_ids
@@ -41,6 +51,8 @@ class AstroDashConfig(AppConfig):
         get_logger(__name__).info(
             "AstroDash starting with APP_VERSION=%s", settings.APP_VERSION
         )
+
+        get_settings()
 
         model_registry.validate_gate_configuration(
             model_registry.MODELS, gate_configuration()
